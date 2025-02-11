@@ -1,6 +1,6 @@
 """Define the creative writing agent graph structure.
 
-Current Date and Time (UTC - YYYY-MM-DD HH:MM:SS formatted): 2025-02-11 22:48:14
+Current Date and Time (UTC - YYYY-MM-DD HH:MM:SS formatted): 2025-02-11 22:52:03
 Current User's Login: fortunestoldco
 """
 
@@ -15,7 +15,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, System
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.agents import create_openai_functions_agent
 from langchain.agents.format_scratchpad import format_to_openai_functions
-from langgraph.graph import StateGraph, Graph
+from langgraph.graph import Graph
 from langgraph.prebuilt.tool_executor import ToolExecutor
 from pydantic import BaseModel, Field
 
@@ -61,23 +61,23 @@ class StoryInput(BaseModel):
         le=10000
     )
 
-def create_initial_state(state_input: Dict | State | StoryInput) -> State:
-    """Create the initial state from the input."""
-    if isinstance(state_input, State):
-        if not state_input.story_parameters:
+def validate_and_initialize(inputs: Dict | State | StoryInput) -> State:
+    """Validate input and create initial state."""
+    if isinstance(inputs, State):
+        if not inputs.story_parameters:
             raise ValueError("State object must have story_parameters")
-        state_input.initialize_chapters()
-        return state_input
+        inputs.initialize_chapters()
+        return inputs
         
-    if isinstance(state_input, dict):
-        state_input = StoryInput(**state_input)
+    if isinstance(inputs, dict):
+        inputs = StoryInput(**inputs)
     
     story_parameters = StoryParameters(
-        starting_point=state_input.starting_point,
-        plot_points=state_input.plot_points,
-        intended_ending=state_input.intended_ending,
-        num_chapters=state_input.num_chapters,
-        words_per_chapter=state_input.words_per_chapter
+        starting_point=inputs.starting_point,
+        plot_points=inputs.plot_points,
+        intended_ending=inputs.intended_ending,
+        num_chapters=inputs.num_chapters,
+        words_per_chapter=inputs.words_per_chapter
     )
     
     initial_message = SystemMessage(
@@ -330,3 +330,4 @@ def create_graph(config: Optional[Configuration] = None) -> Graph:
 
 # Create the graph instance
 graph = create_graph()
+
