@@ -70,13 +70,9 @@ To use OpenAI's chat models:
 OPENAI_API_KEY=your-api-key
 ```
 
-### Input Parameters
 
-The following input parameters are now defined and can be used in Langsmith or the Langgraph Studio:
 
-- `start`: The start line for the document or outline.
-- `plot_points`: A list of plot points for the document or outline.
-- `ending`: The ending of the document or outline.
+
 
 <!--
 End setup instructions

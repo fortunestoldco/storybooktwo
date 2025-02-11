@@ -26,22 +26,11 @@ def scrape_webpages(urls: List[str]) -> str:
 def create_outline(
     points: Annotated[List[str], "List of main points or sections."],
     file_name: Annotated[str, "File path to save the outline."],
-    start: Annotated[Optional[int], "The start line. Default is 0"] = None,
-    plot_points: Annotated[Optional[List[str]], "List of plot points."] = None,
-    ending: Annotated[Optional[str], "The ending of the outline."] = None,
 ) -> Annotated[str, "Path of the saved outline file."]:
     """Create and save an outline."""
     with (WORKING_DIRECTORY / file_name).open("w") as file:
-        if start is None:
-            start = 0
-        for i, point in enumerate(points[start:], start=start):
+        for i, point in enumerate(points):
             file.write(f"{i + 1}. {point}\n")
-        if plot_points:
-            file.write("\nPlot Points:\n")
-            for i, plot_point in enumerate(plot_points):
-                file.write(f"{i + 1}. {plot_point}\n")
-        if ending:
-            file.write(f"\nEnding:\n{ending}\n")
     return f"Outline saved to {file_name}"
 
 @tool
@@ -61,21 +50,10 @@ def read_document(
 def write_document(
     content: Annotated[str, "Text content to be written into the document."],
     file_name: Annotated[str, "File path to save the document."],
-    start: Annotated[Optional[int], "The start line. Default is 0"] = None,
-    plot_points: Annotated[Optional[List[str]], "List of plot points."] = None,
-    ending: Annotated[Optional[str], "The ending of the document."] = None,
 ) -> Annotated[str, "Path of the saved document file."]:
     """Create and save a text document."""
     with (WORKING_DIRECTORY / file_name).open("w") as file:
-        if start is None:
-            start = 0
         file.write(content)
-        if plot_points:
-            file.write("\nPlot Points:\n")
-            for i, plot_point in enumerate(plot_points):
-                file.write(f"{i + 1}. {plot_point}\n")
-        if ending:
-            file.write(f"\nEnding:\n{ending}\n")
     return f"Document saved to {file_name}"
 
 @tool

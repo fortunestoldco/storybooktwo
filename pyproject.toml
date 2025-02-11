@@ -1,53 +1,28 @@
-# Project Configuration
-# Current Date and Time (UTC): 2025-02-11 21:11:58
-# Current User's Login: fortunestoldco
-# Repository: fortunestoldco/storybooktwo
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "storybooktwo"
+name = "team"
 version = "0.1.0"
-description = "A hierarchical team agent system using LangGraph"
-readme = "README.md"
-requires-python = ">=3.10"
 authors = [
     { name = "fortunestoldco", email = "fortunestoldco@users.noreply.github.com" },
 ]
-classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Topic :: Software Development :: Libraries :: Python Modules",
-]
+description = "Hierarchical team agent implementation using LangGraph"
+readme = "README.md"
+requires-python = ">=3.9"
 dependencies = [
-    "langgraph>=0.0.15",
-    "langchain>=0.1.0",
-    "langchain-core>=0.1.0",
-    "langchain-openai>=0.0.5",
-    "langchain-community>=0.0.10",
-    "langchain-mongodb>=0.0.1",
-    "langchain-experimental>=0.0.47",
-    "python-dotenv>=1.0.0",
-    "pydantic>=2.0.0",
-    "typing-extensions>=4.8.0",
+    "langgraph>=0.2.6",
+    "langchain-openai>=0.1.22",
+    "langchain>=0.2.14",
+    "langchain-core>=0.1.22",
+    "langchain-community>=0.2.17",
+    "langchain-experimental>=0.0.52",
+    "python-dotenv>=1.0.1",
+    "tavily-python>=0.4.0",
+    "typing-extensions>=4.9.0",
     "beautifulsoup4>=4.12.0",
     "requests>=2.31.0",
-]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.4.0",
-    "pytest-asyncio>=0.21.1",
-    "black>=23.9.1",
-    "isort>=5.12.0",
-    "mypy>=1.5.1",
-    "ruff>=0.0.291",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -55,40 +30,3 @@ packages = ["src/team"]
 
 [tool.hatch.metadata]
 allow-direct-references = true
-
-[tool.black]
-line-length = 88
-target-version = ["py310", "py311", "py312"]
-include = '\.pyi?$'
-
-[tool.isort]
-profile = "black"
-multi_line_output = 3
-line_length = 88
-
-[tool.mypy]
-python_version = "3.10"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = true
-check_untyped_defs = true
-
-[tool.ruff]
-line-length = 88
-target-version = "py310"
-select = ["E", "F", "B", "I"]
-ignore = ["E501"]
-
-[tool.pytest.ini_options]
-minversion = "6.0"
-addopts = "-ra -q"
-testpaths = [
-    "tests",
-]
-python_files = ["test_*.py", "*_test.py"]
-asyncio_mode = "auto"
-
-[project.urls]
-Homepage = "https://github.com/fortunestoldco/storybooktwo"
-Repository = "https://github.com/fortunestoldco/storybooktwo.git"
-Issues = "https://github.com/fortunestoldco/storybooktwo/issues"

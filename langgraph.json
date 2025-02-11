@@ -3,22 +3,5 @@
   "graphs": {
     "agent": "./src/team/graph.py:graph"
   },
-  "env": ".env",
-  "input_parameters": {
-    "start": {
-      "type": "integer",
-      "description": "The start line for the document or outline."
-    },
-    "plot_points": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "description": "A list of plot points for the document or outline."
-    },
-    "ending": {
-      "type": "string",
-      "description": "The ending of the document or outline."
-    }
-  }
+  "env": ".env"
 }
