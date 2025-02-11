@@ -1,19 +1,22 @@
 """Define the creative writing agent graph structure.
 
-Current Date and Time (UTC): 2025-02-11 22:23:25
+Current Date and Time (UTC - YYYY-MM-DD HH:MM:SS formatted): 2025-02-11 22:30:07
 Current User's Login: fortunestoldco
 """
 
-from typing import Dict, List, Optional, Callable, Any
+from typing import Dict, List, Optional, Callable, Any, Annotated, TypeVar
 import os
 import json
 from datetime import datetime
+from operator import itemgetter
+
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.agents import create_openai_functions_agent
 from langchain.agents.format_scratchpad import format_to_openai_functions
-from langgraph.graph import StateGraph, Graph, START
+from langgraph.graph import Graph, StateGraph
+from langgraph.prebuilt.tool_executor import ToolExecutor
 from pydantic import BaseModel, Field
 
 from src.team.configuration import (
@@ -30,6 +33,7 @@ from src.team.prompts import (
 )
 from src.team.tools import RESEARCH_TOOLS, WRITING_TOOLS
 
+# Define input types
 class StoryInput(BaseModel):
     """Input parameters for the story creation process."""
     starting_point: str = Field(
@@ -45,12 +49,12 @@ class StoryInput(BaseModel):
         description="The desired conclusion of the story"
     )
 
-def create_initial_state(story_input: StoryInput) -> State:
+def create_initial_state(story_input: Dict) -> State:
     """Create the initial state from the story input."""
     story_parameters = StoryParameters(
-        starting_point=story_input.starting_point,
-        plot_points=story_input.plot_points,
-        intended_ending=story_input.intended_ending
+        starting_point=story_input["starting_point"],
+        plot_points=story_input["plot_points"],
+        intended_ending=story_input["intended_ending"]
     )
     
     initial_message = SystemMessage(
@@ -70,17 +74,7 @@ def create_supervisor_node(
     config: Configuration,
     name: str = "supervisor"
 ) -> Callable:
-    """Create a supervisor node that manages team members.
-    
-    Args:
-        llm: Language model to use
-        team_members: List of team member names to supervise
-        config: Configuration instance
-        name: Name of this supervisor
-        
-    Returns:
-        Callable that processes state and returns next steps
-    """
+    """Create a supervisor node that manages team members."""
     prompt = ChatPromptTemplate.from_messages([
         SystemMessage(content=f"""You are the {name} coordinating the following team: {', '.join(team_members)}.
 Your responsibilities:
@@ -104,12 +98,11 @@ Respond with next team member to act or 'FINISH' if complete."""),
         MessagesPlaceholder(variable_name="history"),
         MessagesPlaceholder(variable_name="messages")
     ])
-    
-    def supervisor(state: State) -> Dict:
-        """Route between team members."""
+
+    def decide_next(state: State) -> Dict:
+        """Determine the next step based on current state."""
         message_history = config.get_message_history(state.session_id)
         
-        # Include context about story parameters and research
         context_messages = []
         if state.story_parameters:
             context_messages.append(SystemMessage(content=
@@ -135,58 +128,7 @@ Respond with next team member to act or 'FINISH' if complete."""),
             "next": next_step
         }
     
-    return supervisor
-
-def create_team_graph(
-    supervisor_node: Callable,
-    team_nodes: Dict[str, Callable],
-    config: Configuration,
-    name: str
-) -> Graph:
-    """Create a team graph with supervisor and team members.
-    
-    Args:
-        supervisor_node: The supervisor node function
-        team_nodes: Dictionary of team member node functions
-        config: Configuration instance
-        name: Name of this team graph
-        
-    Returns:
-        Compiled team graph
-    """
-    workflow = StateGraph(State)
-    
-    # Add nodes
-    workflow.add_node("supervisor", supervisor_node)
-    for node_name, node_fn in team_nodes.items():
-        workflow.add_node(node_name, node_fn)
-    
-    # Add end node
-    def end_node(state: State) -> Dict:
-        """End state node."""
-        return {
-            "messages": state.messages,
-            "next": "END"
-        }
-    
-    workflow.add_node("end", end_node)
-    
-    # Add edges
-    for node_name in team_nodes:
-        workflow.add_edge("supervisor", node_name)
-        workflow.add_edge(node_name, "supervisor")
-    
-    # Add conditional edges from supervisor
-    workflow.add_conditional_edges(
-        "supervisor",
-        lambda x: "end" if x["next"] == "FINISH" else x["next"],
-        {**{name: name for name in team_nodes.keys()}, "end": "end"}
-    )
-    
-    # Set entry point
-    workflow.set_entry_point("supervisor")
-    
-    return workflow.compile()
+    return decide_next
 
 def create_agent_node(
     llm: ChatOpenAI,
@@ -195,18 +137,9 @@ def create_agent_node(
     name: str,
     config: Configuration
 ) -> Callable:
-    """Create an agent node that can use tools.
+    """Create an agent node that can use tools."""
+    tool_executor = ToolExecutor(tools=tools)
     
-    Args:
-        llm: Language model to use
-        tools: List of tools the agent can use
-        system_prompt: System prompt for the agent
-        name: Name of this agent
-        config: Configuration instance
-        
-    Returns:
-        Callable that processes state and returns next steps
-    """
     prompt = ChatPromptTemplate.from_messages([
         SystemMessage(content=system_prompt),
         MessagesPlaceholder(variable_name="history"),
@@ -215,12 +148,11 @@ def create_agent_node(
     ])
     
     agent = create_openai_functions_agent(llm, tools, prompt)
-    
-    def agent_node(state: State) -> Dict:
+
+    def run_agent(state: State) -> Dict:
         """Execute agent with tools."""
         message_history = config.get_message_history(state.session_id)
         
-        # Include story parameters and research in context
         context = []
         if state.story_parameters:
             context.append(SystemMessage(content=state.story_parameters.to_prompt()))
@@ -245,37 +177,26 @@ def create_agent_node(
             "next": "supervisor"
         }
     
-    return agent_node
+    return run_agent
 
-def create_graph(config: Optional[Configuration] = None) -> StateGraph:
-    """Create the creative writing agent graph.
-    
-    Args:
-        config: Optional configuration instance
-        
-    Returns:
-        Compiled state graph
-    """
+def create_graph(config: Optional[Configuration] = None) -> Graph:
+    """Create the creative writing agent graph."""
     if config is None:
         config = Configuration()
 
-    # Define the graph with input schema
-    workflow = StateGraph(State, input_schema=StoryInput)
+    # Create the workflow
+    workflow = Graph()
+
+    # Add nodes
+    workflow.add_node("start", create_initial_state)
     
-    # Add input validator
-    def validate_and_initialize(story_input: StoryInput) -> State:
-        """Validate input and create initial state."""
-        return create_initial_state(story_input)
-    
-    workflow.add_node("start", validate_and_initialize)
-    
-    # Create teams and supervisors
+    # Create LLM
     llm = ChatOpenAI(
         model=config.model,
         openai_api_key=os.getenv("OPENAI_API_KEY")
     )
 
-    # Create research team
+    # Create research team nodes
     research_agents = {
         "market_researcher": create_agent_node(
             llm, RESEARCH_TOOLS, MARKET_ANALYST_PROMPT, "market_researcher", config
@@ -285,11 +206,7 @@ def create_graph(config: Optional[Configuration] = None) -> StateGraph:
         )
     }
     
-    research_supervisor = create_supervisor_node(
-        llm, list(research_agents.keys()), config, "research_supervisor"
-    )
-    
-    # Create writing team
+    # Create writing team nodes
     writing_agents = {
         "writer": create_agent_node(
             llm, WRITING_TOOLS, DOC_WRITER_PROMPT, "writer", config
@@ -298,61 +215,55 @@ def create_graph(config: Optional[Configuration] = None) -> StateGraph:
             llm, WRITING_TOOLS, NOTE_TAKER_PROMPT, "editor", config
         )
     }
-    
+
+    # Add all agent nodes
+    for name, agent in {**research_agents, **writing_agents}.items():
+        workflow.add_node(name, agent)
+
+    # Create and add supervisors
+    research_supervisor = create_supervisor_node(
+        llm, list(research_agents.keys()), config, "research_supervisor"
+    )
     writing_supervisor = create_supervisor_node(
         llm, list(writing_agents.keys()), config, "writing_supervisor"
     )
-
-    # Add team nodes
-    workflow.add_node("research_team", create_team_graph(
-        research_supervisor, research_agents, config, "research_team"
-    ))
-    workflow.add_node("writing_team", create_team_graph(
-        writing_supervisor, writing_agents, config, "writing_team"
-    ))
-    
-    # Create top-level supervisor
     top_supervisor = create_supervisor_node(
         llm, ["research_team", "writing_team"], config, "top_supervisor"
     )
+
+    workflow.add_node("research_supervisor", research_supervisor)
+    workflow.add_node("writing_supervisor", writing_supervisor)
     workflow.add_node("supervisor", top_supervisor)
-    
-    # Add end node
-    def end_node(state: State) -> Dict:
-        """End state node."""
-        return {
-            "messages": state.messages,
-            "next": "END"
-        }
-    
-    workflow.add_node("end", end_node)
-    
+
     # Add edges
     workflow.add_edge("start", "supervisor")
-    workflow.add_edge("supervisor", "research_team")
-    workflow.add_edge("supervisor", "writing_team")
-    workflow.add_edge("research_team", "supervisor")
-    workflow.add_edge("writing_team", "supervisor")
     
-    # Set conditional edges
-    workflow.add_conditional_edges(
+    # Connect research team
+    for agent in research_agents:
+        workflow.add_edge("research_supervisor", agent)
+        workflow.add_edge(agent, "research_supervisor")
+    
+    # Connect writing team
+    for agent in writing_agents:
+        workflow.add_edge("writing_supervisor", agent)
+        workflow.add_edge(agent, "writing_supervisor")
+    
+    # Connect to top supervisor
+    workflow.add_edge("supervisor", "research_supervisor")
+    workflow.add_edge("supervisor", "writing_supervisor")
+    workflow.add_edge("research_supervisor", "supervisor")
+    workflow.add_edge("writing_supervisor", "supervisor")
+
+    # Add end condition
+    workflow.add_edge_filter(
         "supervisor",
-        lambda x: "end" if x["next"] == "FINISH" else x["next"],
-        {
-            "research_team": "research_team", 
-            "writing_team": "writing_team",
-            "end": "end"
-        }
+        lambda x: [] if x["next"] == "FINISH" else [x["next"]]
     )
-    
+
     # Set entry point
     workflow.set_entry_point("start")
-    
-    # Compile the graph
-    final_graph = workflow.compile()
-    final_graph.name = "Creative Writing Agent"
-    
-    return final_graph
+
+    return workflow.compile()
 
 # Create the graph instance
 graph = create_graph()

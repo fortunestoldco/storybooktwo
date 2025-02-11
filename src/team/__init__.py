@@ -1,38 +1,48 @@
-"""Creative Writing Agent with Team-based Approach
+"""Team module initialization.
 
-Current Date and Time (UTC): 2025-02-11 22:09:41
+Current Date and Time (UTC - YYYY-MM-DD HH:MM:SS formatted): 2025-02-11 22:31:12
 Current User's Login: fortunestoldco
 """
 
 from .configuration import (
-    Configuration,
     State,
+    Configuration,
     StoryParameters,
     MarketResearch,
-    SimilarBook,
     Demographics,
-    MarketAnalysis
+    MarketAnalysis,
+    SimilarBook,
+    MessageWrapper
 )
-from .graph import graph, create_graph
-from .tools import (
-    RESEARCH_TOOLS,
-    WRITING_TOOLS,
-    SearchQuery,
-    DocumentOperation
+from .graph import graph, create_graph, StoryInput
+from .prompts import (
+    RESEARCH_SYSTEM_PROMPT,
+    MARKET_ANALYST_PROMPT,
+    REVIEW_ANALYST_PROMPT,
+    WRITING_SYSTEM_PROMPT,
+    DOC_WRITER_PROMPT,
+    NOTE_TAKER_PROMPT
 )
+from .tools import RESEARCH_TOOLS, WRITING_TOOLS
 
 __all__ = [
-    "Configuration",
-    "State",
-    "StoryParameters",
-    "MarketResearch",
-    "SimilarBook",
-    "Demographics",
-    "MarketAnalysis",
-    "graph",
-    "create_graph",
-    "RESEARCH_TOOLS",
-    "WRITING_TOOLS",
-    "SearchQuery",
-    "DocumentOperation"
+    'State',
+    'Configuration',
+    'StoryParameters',
+    'MarketResearch',
+    'Demographics',
+    'MarketAnalysis',
+    'SimilarBook',
+    'MessageWrapper',
+    'graph',
+    'create_graph',
+    'StoryInput',
+    'RESEARCH_SYSTEM_PROMPT',
+    'MARKET_ANALYST_PROMPT',
+    'REVIEW_ANALYST_PROMPT',
+    'WRITING_SYSTEM_PROMPT',
+    'DOC_WRITER_PROMPT',
+    'NOTE_TAKER_PROMPT',
+    'RESEARCH_TOOLS',
+    'WRITING_TOOLS'
 ]
