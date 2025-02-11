@@ -1,6 +1,6 @@
 """Define the creative writing agent graph structure.
 
-Current Date and Time (UTC - YYYY-MM-DD HH:MM:SS formatted): 2025-02-11 22:32:58
+Current Date and Time (UTC - YYYY-MM-DD HH:MM:SS formatted): 2025-02-11 22:37:24
 Current User's Login: fortunestoldco
 """
 
@@ -33,7 +33,6 @@ from src.team.prompts import (
 )
 from src.team.tools import RESEARCH_TOOLS, WRITING_TOOLS
 
-# Define input types
 class StoryInput(BaseModel):
     """Input parameters for the story creation process."""
     starting_point: str = Field(
@@ -49,12 +48,22 @@ class StoryInput(BaseModel):
         description="The desired conclusion of the story"
     )
 
-def create_initial_state(story_input: Dict) -> State:
-    """Create the initial state from the story input."""
+def create_initial_state(story_input: StoryInput | Dict) -> State:
+    """Create the initial state from the story input.
+    
+    Args:
+        story_input: Either a StoryInput object or a dict with story parameters
+        
+    Returns:
+        Initial state object
+    """
+    if isinstance(story_input, dict):
+        story_input = StoryInput(**story_input)
+    
     story_parameters = StoryParameters(
-        starting_point=story_input["starting_point"],
-        plot_points=story_input["plot_points"],
-        intended_ending=story_input["intended_ending"]
+        starting_point=story_input.starting_point,
+        plot_points=story_input.plot_points,
+        intended_ending=story_input.intended_ending
     )
     
     initial_message = SystemMessage(
@@ -187,8 +196,12 @@ def create_graph(config: Optional[Configuration] = None) -> StateGraph:
     # Create the workflow
     workflow = StateGraph(State)
     
-    # Add nodes
-    workflow.add_node("start", create_initial_state)
+    # Add input validator
+    def validate_and_initialize(inputs: Dict | StoryInput) -> State:
+        """Validate input and create initial state."""
+        return create_initial_state(inputs)
+    
+    workflow.add_node("start", validate_and_initialize)
     
     # Create LLM
     llm = ChatOpenAI(
