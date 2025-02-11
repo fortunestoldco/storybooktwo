@@ -1,6 +1,6 @@
 """Define the creative writing agent graph structure.
 
-Current Date and Time (UTC - YYYY-MM-DD HH:MM:SS formatted): 2025-02-11 22:37:24
+Current Date and Time (UTC - YYYY-MM-DD HH:MM:SS formatted): 2025-02-11 22:43:06
 Current User's Login: fortunestoldco
 """
 
@@ -48,22 +48,30 @@ class StoryInput(BaseModel):
         description="The desired conclusion of the story"
     )
 
-def create_initial_state(story_input: StoryInput | Dict) -> State:
-    """Create the initial state from the story input.
+def create_initial_state(state_input: Dict | State | StoryInput) -> State:
+    """Create the initial state from the input.
     
     Args:
-        story_input: Either a StoryInput object or a dict with story parameters
+        state_input: Either a StoryInput object, State object, or a dict with story parameters
         
     Returns:
         Initial state object
     """
-    if isinstance(story_input, dict):
-        story_input = StoryInput(**story_input)
+    # If it's already a State object, we just need to ensure it has the required fields
+    if isinstance(state_input, State):
+        if not state_input.story_parameters:
+            raise ValueError("State object must have story_parameters")
+        return state_input
+        
+    # If it's a dict, convert to StoryInput
+    if isinstance(state_input, dict):
+        state_input = StoryInput(**state_input)
     
+    # Now we should have a StoryInput object
     story_parameters = StoryParameters(
-        starting_point=story_input.starting_point,
-        plot_points=story_input.plot_points,
-        intended_ending=story_input.intended_ending
+        starting_point=state_input.starting_point,
+        plot_points=state_input.plot_points,
+        intended_ending=state_input.intended_ending
     )
     
     initial_message = SystemMessage(
@@ -197,9 +205,12 @@ def create_graph(config: Optional[Configuration] = None) -> StateGraph:
     workflow = StateGraph(State)
     
     # Add input validator
-    def validate_and_initialize(inputs: Dict | StoryInput) -> State:
+    def validate_and_initialize(inputs: Dict | State | StoryInput) -> State:
         """Validate input and create initial state."""
-        return create_initial_state(inputs)
+        try:
+            return create_initial_state(inputs)
+        except Exception as e:
+            raise ValueError(f"Invalid input: {str(e)}") from e
     
     workflow.add_node("start", validate_and_initialize)
     
