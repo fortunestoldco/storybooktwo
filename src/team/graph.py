@@ -39,7 +39,10 @@ def create_agent_node(
     tools: List,
     system_prompt: str,
     name: str,
-    config: Configuration
+    config: Configuration,
+    start: Optional[int] = None,
+    plot_points: Optional[List[str]] = None,
+    ending: Optional[str] = None
 ):
     """Create an agent node that can use tools."""
     current_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
@@ -65,7 +68,10 @@ def create_agent_node(
         agent_input = {
             "history": message_history.messages,
             "messages": state.get("messages", []),
-            "agent_scratchpad": format_to_openai_functions([])
+            "agent_scratchpad": format_to_openai_functions([]),
+            "start": start,
+            "plot_points": plot_points,
+            "ending": ending
         }
         
         # Execute agent
@@ -127,7 +133,10 @@ def create_team_graph(
     supervisor_node,
     team_nodes: Dict[str, callable],
     config: Configuration,
-    name: str
+    name: str,
+    start: Optional[int] = None,
+    plot_points: Optional[List[str]] = None,
+    ending: Optional[str] = None
 ) -> Graph:
     """Create a team graph."""
     workflow = StateGraph(State)
