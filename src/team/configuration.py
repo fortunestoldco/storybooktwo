@@ -1,10 +1,9 @@
 """Configuration and state classes for the creative writing agent.
 
-Current Date and Time (UTC): 2025-02-11 22:09:45
+Current Date and Time (UTC): 2025-02-11 22:11:24
 Current User's Login: fortunestoldco
 """
 
-from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Any
 from pydantic import BaseModel, Field, ConfigDict
 from langchain_core.messages import BaseMessage
@@ -81,16 +80,19 @@ class State(BaseModel):
             return getattr(self, key)
         return default
 
-    class Config:
-        arbitrary_types_allowed = True
-
-@dataclass
 class Configuration:
     """Configuration for the agent system."""
-    model: str = "gpt-4"
-    mongodb_connection: str = ""
-    mongodb_db_name: str = "creative_writing"
-    mongodb_collection: str = "story_development"
+    def __init__(
+        self,
+        model: str = "gpt-4",
+        mongodb_connection: str = "",
+        mongodb_db_name: str = "creative_writing",
+        mongodb_collection: str = "story_development"
+    ):
+        self.model = model
+        self.mongodb_connection = mongodb_connection
+        self.mongodb_db_name = mongodb_db_name
+        self.mongodb_collection = mongodb_collection
     
     def get_message_history(self, session_id: str) -> MongoDBChatMessageHistory:
         """Get MongoDB message history for a session."""
