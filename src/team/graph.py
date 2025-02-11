@@ -1,43 +1,38 @@
-"""Define the creative writing agent graph structure.
+"""Define the hierarchical team agent graph structure.
 
-Current Date and Time (UTC - YYYY-MM-DD HH:MM:SS formatted): 2025-02-11 23:16:54
+Current Date and Time (UTC): 2025-02-11 21:21:50
 Current User's Login: fortunestoldco
 """
 
-from typing import Dict, List, Optional, Callable, Any, Annotated, TypeVar, cast
+from typing import Dict, List, Optional
 import os
-import json
 from datetime import datetime
-from operator import itemgetter
-
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.agents import create_openai_functions_agent
 from langchain.agents.format_scratchpad import format_to_openai_functions
-from langgraph.graph import Graph, END
-from langgraph.prebuilt.tool_executor import ToolExecutor
-from pydantic import BaseModel, Field, validator
+from langchain.agents.output_parsers import OpenAIFunctionsAgentOutputParser
+from langgraph.graph import StateGraph, Graph, START
 
-from src.team.configuration import (
-    State, Configuration, StoryParameters, 
-    MarketResearch, MessageWrapper,
-    ChapterStatus, process_input, create_initial_state
-)
+from src.team.configuration import State, Configuration
 from src.team.prompts import (
     RESEARCH_SYSTEM_PROMPT,
-    MARKET_ANALYST_PROMPT,
-    REVIEW_ANALYST_PROMPT,
     WRITING_SYSTEM_PROMPT,
+    SUPERVISOR_SYSTEM_PROMPT,
     DOC_WRITER_PROMPT,
     NOTE_TAKER_PROMPT,
+    CHART_GENERATOR_PROMPT,
 )
-from src.team.tools import RESEARCH_TOOLS, WRITING_TOOLS
-
-def validate_and_initialize(inputs: Dict) -> State:
-    """Validate input and create initial state."""
-    validated_input = process_input(inputs)
-    return create_initial_state(validated_input)
+from src.team.tools import (
+    tavily_tool,
+    scrape_webpages,
+    create_outline,
+    read_document,
+    write_document,
+    edit_document,
+    python_repl_tool,
+)
 
 def create_agent_node(
     llm: ChatOpenAI,
@@ -45,243 +40,199 @@ def create_agent_node(
     system_prompt: str,
     name: str,
     config: Configuration
-) -> Callable:
+):
     """Create an agent node that can use tools."""
-    tool_executor = ToolExecutor(tools=tools)
+    current_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     
+    # Create the agent prompt
     prompt = ChatPromptTemplate.from_messages([
         SystemMessage(content=system_prompt),
         MessagesPlaceholder(variable_name="history"),
         MessagesPlaceholder(variable_name="messages"),
         MessagesPlaceholder(variable_name="agent_scratchpad"),
+        SystemMessage(content=f"Current Date and Time (UTC): {current_time}\nAgent: {name}")
     ])
     
+    # Create the agent
     agent = create_openai_functions_agent(llm, tools, prompt)
-
-    def run_agent(state: Dict) -> Dict:
+    
+    def agent_node(state: State) -> Dict:
         """Execute agent with tools."""
-        current_state = State(**state)
-        message_history = config.get_message_history(current_state.session_id)
+        # Get message history
+        message_history = config.get_message_history(state.session_id)
         
-        context = []
-        if current_state.story_parameters:
-            context.append(SystemMessage(content=current_state.story_parameters.to_prompt()))
-        if current_state.market_research and current_state.market_research.similar_books:
-            context.append(SystemMessage(content=
-                f"Market Research:\n{json.dumps(current_state.market_research.dict(), indent=2)}"
-            ))
-        
-        # Add chapter status
-        chapter_status = current_state.get_chapter_status()
-        context.append(SystemMessage(content=
-            f"Chapter Status:\n{json.dumps(chapter_status, indent=2)}"
-        ))
-        
+        # Prepare the input
         agent_input = {
-            "history": message_history.messages + context,
-            "messages": current_state.get_messages(),
+            "history": message_history.messages,
+            "messages": state.get("messages", []),
             "agent_scratchpad": format_to_openai_functions([])
         }
         
+        # Execute agent
         output = agent.invoke(agent_input)
         response = output.return_values["output"]
         
-        message_history.add_ai_message(AIMessage(content=response))
+        # Save to history
+        message_history.add_ai_message(SystemMessage(content=response))
         
-        current_state.add_message(AIMessage(content=response))
-        current_state.current_supervisor = name  # Track current agent for routing
-        return current_state.dict()
+        return {
+            "messages": state.get("messages", []) + [SystemMessage(content=response)],
+            "next": "supervisor"
+        }
     
-    return run_agent
+    return agent_node
 
 def create_supervisor_node(
     llm: ChatOpenAI,
     team_members: List[str],
     config: Configuration,
     name: str = "supervisor"
-) -> Callable:
-    """Create a supervisor node that manages team members."""
+):
+    """Create a supervisor node."""
     prompt = ChatPromptTemplate.from_messages([
-        SystemMessage(content=f"""You are the {name} coordinating the following team: {', '.join(team_members)}.
-Your responsibilities:
-1. Review current progress and team outputs
-2. Determine next steps based on the story requirements
-3. Ensure all plot points are being addressed
-4. Maintain consistency with target demographic
-5. Track chapter progress and word count goals
-
-For research phase:
-- Ensure market analysis is thorough
-- Verify demographic targeting is clear
-- Check that improvement opportunities are identified
-
-For writing phase:
-- Track chapter completion status
-- Ensure word count targets are being met
-- Verify plot points are being incorporated
-- Ensure tone matches target demographic
-- Check that market research insights are being used
-
-Respond with next team member to act or 'FINISH' if complete."""),
+        SystemMessage(content=f"You are the {name} managing: {', '.join(team_members)}.\n"
+                    "Given the current context and history, decide which team member should act next.\n"
+                    "Respond with their name or 'FINISH' if the task is complete."),
         MessagesPlaceholder(variable_name="history"),
         MessagesPlaceholder(variable_name="messages")
     ])
-
-    def decide_next(state: Dict) -> Dict:
+    
+    def supervisor(state: State) -> Dict:
         """Route between team members."""
-        current_state = State(**state)
-        message_history = config.get_message_history(current_state.session_id)
+        # Get message history
+        message_history = config.get_message_history(state.session_id)
         
-        context_messages = []
-        if current_state.story_parameters:
-            context_messages.append(SystemMessage(content=
-                f"Story Parameters:\n{current_state.story_parameters.to_prompt()}"
-            ))
-        if current_state.market_research and current_state.market_research.similar_books:
-            context_messages.append(SystemMessage(content=
-                f"Market Research:\n{json.dumps(current_state.market_research.dict(), indent=2)}"
-            ))
-            
-        # Add chapter status
-        chapter_status = current_state.get_chapter_status()
-        context_messages.append(SystemMessage(content=
-            f"Chapter Status:\n{json.dumps(chapter_status, indent=2)}"
-        ))
-        
+        # Format messages
         formatted_prompt = prompt.format_messages(
-            history=message_history.messages + context_messages,
-            messages=current_state.get_messages()
+            history=message_history.messages,
+            messages=state.get("messages", [])
         )
         
+        # Get decision
         response = llm.invoke(formatted_prompt)
         next_step = response.content.strip()
         
+        # Save to history
         message_history.add_ai_message(response)
         
-        current_state.add_message(response)
-        current_state.next = next_step
-        current_state.current_supervisor = name  # Track current supervisor
-        return current_state.dict()
+        # Return next step
+        return {
+            "messages": state.get("messages", []) + [response],
+            "next": next_step
+        }
     
-    return decide_next
+    return supervisor
 
-def create_graph(config: Optional[Configuration] = None) -> Graph:
-    """Create the creative writing agent graph."""
+def create_team_graph(
+    supervisor_node,
+    team_nodes: Dict[str, callable],
+    config: Configuration,
+    name: str
+) -> Graph:
+    """Create a team graph."""
+    workflow = StateGraph(State)
+    
+    # Add nodes
+    workflow.add_node("supervisor", supervisor_node)
+    for node_name, node_fn in team_nodes.items():
+        workflow.add_node(node_name, node_fn)
+    
+    # Add edges from supervisor to all team members
+    for node_name in team_nodes:
+        workflow.add_edge("supervisor", node_name)
+        workflow.add_edge(node_name, "supervisor")
+    
+    # Add end state node
+    def end_node(state: State) -> Dict:
+        """End state node."""
+        return {"messages": state.get("messages", []), "next": "END"}
+    
+    workflow.add_node("end", end_node)
+    
+    # Set conditional edges
+    workflow.add_conditional_edges(
+        "supervisor",
+        lambda x: "end" if x["next"] == "FINISH" else x["next"],
+        {**{name: name for name in team_nodes.keys()}, "end": "end"}
+    )
+    
+    # Set entry point
+    workflow.set_entry_point("supervisor")
+    
+    return workflow.compile()
+
+def create_graph(config: Optional[Configuration] = None) -> StateGraph:
+    """Create the complete hierarchical team graph."""
     if config is None:
         config = Configuration()
 
-    workflow = Graph()
-    
-    # Add input validator
-    workflow.add_node("start", validate_and_initialize)
-    
-    # Create LLM
     llm = ChatOpenAI(
         model=config.model,
         openai_api_key=os.getenv("OPENAI_API_KEY")
     )
 
-    # Create research team nodes
+    # Create research team
     research_agents = {
-        "market_researcher": create_agent_node(
-            llm, RESEARCH_TOOLS, MARKET_ANALYST_PROMPT, "market_researcher", config
-        ),
-        "review_analyst": create_agent_node(
-            llm, RESEARCH_TOOLS, REVIEW_ANALYST_PROMPT, "review_analyst", config
-        )
+        "search": create_agent_node(llm, [tavily_tool], RESEARCH_SYSTEM_PROMPT, "search", config),
+        "web_scraper": create_agent_node(llm, [scrape_webpages], RESEARCH_SYSTEM_PROMPT, "web_scraper", config)
     }
-    
-    # Create writing team nodes
+    research_supervisor = create_supervisor_node(llm, list(research_agents.keys()), config, "research_supervisor")
+    research_team = create_team_graph(research_supervisor, research_agents, config, "research_team")
+
+    # Create writing team
     writing_agents = {
-        "writer": create_agent_node(
-            llm, WRITING_TOOLS, DOC_WRITER_PROMPT, "writer", config
-        ),
-        "editor": create_agent_node(
-            llm, WRITING_TOOLS, NOTE_TAKER_PROMPT, "editor", config
-        )
+        "doc_writer": create_agent_node(llm, [write_document, edit_document, read_document], DOC_WRITER_PROMPT, "doc_writer", config),
+        "note_taker": create_agent_node(llm, [create_outline, read_document], NOTE_TAKER_PROMPT, "note_taker", config),
+        "chart_generator": create_agent_node(llm, [read_document, python_repl_tool], CHART_GENERATOR_PROMPT, "chart_generator", config)
     }
+    writing_supervisor = create_supervisor_node(llm, list(writing_agents.keys()), config, "writing_supervisor")
+    writing_team = create_team_graph(writing_supervisor, writing_agents, config, "writing_team")
 
-    # Create supervisors
-    research_supervisor = create_supervisor_node(
-        llm, list(research_agents.keys()), config, "research_supervisor"
-    )
-    writing_supervisor = create_supervisor_node(
-        llm, list(writing_agents.keys()), config, "writing_supervisor"
-    )
-    top_supervisor = create_supervisor_node(
-        llm, ["research_team", "writing_team"], config, "supervisor"
-    )
-
-    # Add all nodes
-    for name, agent in {**research_agents, **writing_agents}.items():
-        workflow.add_node(name, agent)
+    # Create main workflow graph
+    workflow = StateGraph(State)
     
-    workflow.add_node("research_supervisor", research_supervisor)
-    workflow.add_node("writing_supervisor", writing_supervisor)
+    # Add the teams as nodes
+    workflow.add_node("research_team", research_team)
+    workflow.add_node("writing_team", writing_team)
+    
+    # Create top-level supervisor
+    top_supervisor = create_supervisor_node(
+        llm, ["research_team", "writing_team"], config, "top_supervisor"
+    )
     workflow.add_node("supervisor", top_supervisor)
-
-    def route_next(state: Dict) -> List[str]:
-        """Route to the next step based on state."""
-        next_step = state.get("next", "")
-        if next_step == "FINISH":
-            return [END]
-            
-        # Get current supervisor/context
-        current_supervisor = state.get("current_supervisor", "supervisor")
-        
-        # Define valid transitions
-        if current_supervisor == "supervisor":
-            if next_step in ["research_supervisor", "writing_supervisor"]:
-                return [next_step]
-                
-        elif current_supervisor == "research_supervisor":
-            if next_step in research_agents:
-                return [next_step]
-            if next_step == "supervisor":
-                return [next_step]
-                
-        elif current_supervisor == "writing_supervisor":
-            if next_step in writing_agents:
-                return [next_step]
-            if next_step == "supervisor":
-                return [next_step]
-                
-        elif current_supervisor in research_agents:
-            return ["research_supervisor"]
-            
-        elif current_supervisor in writing_agents:
-            return ["writing_supervisor"]
-            
-        return []
-
-    # Add initial edge
-    workflow.add_edge("start", "supervisor")
-
-    # Add conditional routing for all nodes
-    for node in [
+    
+    # Add end state node
+    def end_node(state: State) -> Dict:
+        """End state node."""
+        return {"messages": state.get("messages", []), "next": "END"}
+    
+    workflow.add_node("end", end_node)
+    
+    # Add edges
+    workflow.add_edge("supervisor", "research_team")
+    workflow.add_edge("supervisor", "writing_team")
+    workflow.add_edge("research_team", "supervisor")
+    workflow.add_edge("writing_team", "supervisor")
+    
+    # Set conditional edges
+    workflow.add_conditional_edges(
         "supervisor",
-        "research_supervisor",
-        "writing_supervisor",
-        *research_agents.keys(),
-        *writing_agents.keys()
-    ]:
-        workflow.add_conditional_edges(
-            node,
-            route_next,
-            [
-                "supervisor",
-                "research_supervisor",
-                "writing_supervisor",
-                *research_agents.keys(),
-                *writing_agents.keys(),
-                END
-            ]
-        )
-
+        lambda x: "end" if x["next"] == "FINISH" else x["next"],
+        {
+            "research_team": "research_team", 
+            "writing_team": "writing_team",
+            "end": "end"
+        }
+    )
+    
     # Set entry point
-    workflow.set_entry_point("start")
+    workflow.set_entry_point("supervisor")
+    
+    # Compile the graph
+    final_graph = workflow.compile()
+    final_graph.name = "Hierarchical Team Agent"
+    
+    return final_graph
 
-    return workflow.compile()
-
-# Create the graph instance
+# Create the graph instance for the API server
 graph = create_graph()

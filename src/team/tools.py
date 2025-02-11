@@ -1,144 +1,94 @@
-"""Tools for the creative writing agent.
+"""Tool definitions for the hierarchical team agent."""
 
-Current Date and Time (UTC): 2025-02-11 22:09:41
-Current User's Login: fortunestoldco
-"""
+from typing import Annotated, Dict, List, Optional
+from langchain_core.tools import tool
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_community.document_loaders import WebBaseLoader
+from langchain_experimental.utilities import PythonREPL
+from .configuration import WORKING_DIRECTORY
 
-from typing import List, Dict, Optional, Any
-import json
-import requests
-from bs4 import BeautifulSoup
-from langchain.tools import Tool
-from pydantic import BaseModel, Field, ConfigDict
+# Initialize tools
+tavily_tool = TavilySearchResults(max_results=5)
 
-from .configuration import (
-    SimilarBook,
-    Demographics,
-    MarketAnalysis,
-    MarketResearch
-)
-
-class SearchQuery(BaseModel):
-    """Search query parameters."""
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    
-    query: str = Field(..., description="Search query string")
-    platform: str = Field(..., description="Platform to search (e.g., Amazon, Goodreads)")
-    filters: Dict[str, Any] = Field(default_factory=dict, description="Search filters")
-
-async def search_bestsellers(query: str) -> List[SimilarBook]:
-    """Search bestseller lists across multiple platforms."""
-    # Implementation using real APIs would go here
-    return []
-
-async def analyze_book_reviews(book_url: str) -> List[Dict[str, str]]:
-    """Analyze reviews for a specific book."""
-    # Implementation using real APIs would go here
-    return []
-
-async def get_demographic_data(genre: str) -> Demographics:
-    """Get demographic data for a genre."""
-    # Implementation using real APIs would go here
-    return Demographics(
-        age_range="",
-        interests=[],
-        reading_level="",
-        market_segment=""
+@tool
+def scrape_webpages(urls: List[str]) -> str:
+    """Use requests and bs4 to scrape the provided web pages for detailed information."""
+    loader = WebBaseLoader(urls)
+    docs = loader.load()
+    return "\n\n".join(
+        [
+            f'<Document name="{doc.metadata.get("title", "")}">\n{doc.page_content}\n</Document>'
+            for doc in docs
+        ]
     )
 
-async def analyze_market_trends(genre: str) -> MarketAnalysis:
-    """Analyze current market trends in a genre."""
-    # Implementation using real APIs would go here
-    return MarketAnalysis()
+@tool
+def create_outline(
+    points: Annotated[List[str], "List of main points or sections."],
+    file_name: Annotated[str, "File path to save the outline."],
+) -> Annotated[str, "Path of the saved outline file."]:
+    """Create and save an outline."""
+    with (WORKING_DIRECTORY / file_name).open("w") as file:
+        for i, point in enumerate(points):
+            file.write(f"{i + 1}. {point}\n")
+    return f"Outline saved to {file_name}"
 
-class DocumentOperation(BaseModel):
-    """Document operation parameters."""
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    
-    filename: str = Field(..., description="Document filename")
-    content: Optional[str] = Field(None, description="Content to write")
-    operation: str = Field(..., description="Operation type (read/write/edit)")
-    edits: Optional[List[Dict[str, str]]] = Field(None, description="Edit operations")
+@tool
+def read_document(
+    file_name: Annotated[str, "File path to read the document from."],
+    start: Annotated[Optional[int], "The start line. Default is 0"] = None,
+    end: Annotated[Optional[int], "The end line. Default is None"] = None,
+) -> str:
+    """Read the specified document."""
+    with (WORKING_DIRECTORY / file_name).open("r") as file:
+        lines = file.readlines()
+    if start is None:
+        start = 0
+    return "\n".join(lines[start:end])
 
-# Document handling tools
-def read_document(filename: str) -> str:
-    """Read content from a document."""
-    with open(filename, 'r') as f:
-        return f.read()
+@tool
+def write_document(
+    content: Annotated[str, "Text content to be written into the document."],
+    file_name: Annotated[str, "File path to save the document."],
+) -> Annotated[str, "Path of the saved document file."]:
+    """Create and save a text document."""
+    with (WORKING_DIRECTORY / file_name).open("w") as file:
+        file.write(content)
+    return f"Document saved to {file_name}"
 
-def write_document(op: DocumentOperation) -> str:
-    """Write content to a document."""
-    with open(op.filename, 'w') as f:
-        f.write(op.content)
-    return f"Written {len(op.content)} characters to {op.filename}"
+@tool
+def edit_document(
+    file_name: Annotated[str, "Path of the document to be edited."],
+    inserts: Annotated[
+        Dict[int, str],
+        "Dictionary where key is the line number (1-indexed) and value is the text to be inserted at that line.",
+    ],
+) -> Annotated[str, "Path of the edited document file."]:
+    """Edit a document by inserting text at specific line numbers."""
+    with (WORKING_DIRECTORY / file_name).open("r") as file:
+        lines = file.readlines()
 
-def edit_document(op: DocumentOperation) -> str:
-    """Apply edits to a document."""
-    content = read_document(op.filename)
-    if op.edits:
-        for edit in op.edits:
-            # Apply edits (implementation would go here)
-            pass
-    write_document(DocumentOperation(
-        filename=op.filename,
-        content=content,
-        operation="write"
-    ))
-    return f"Applied {len(op.edits)} edits to {op.filename}"
+    sorted_inserts = sorted(inserts.items())
+    for line_number, text in sorted_inserts:
+        if 1 <= line_number <= len(lines) + 1:
+            lines.insert(line_number - 1, text + "\n")
+        else:
+            return f"Error: Line number {line_number} is out of range."
 
-# Tool instances
-bestseller_tool = Tool(
-    name="bestseller_research",
-    func=search_bestsellers,
-    description="Search bestseller lists across multiple platforms"
-)
+    with (WORKING_DIRECTORY / file_name).open("w") as file:
+        file.writelines(lines)
+    return f"Document edited and saved to {file_name}"
 
-review_tool = Tool(
-    name="review_analysis",
-    func=analyze_book_reviews,
-    description="Analyze reader reviews and ratings for books"
-)
+# Create Python REPL tool
+repl = PythonREPL()
 
-demographic_tool = Tool(
-    name="demographic_analysis",
-    func=get_demographic_data,
-    description="Get demographic data for book genres"
-)
-
-market_tool = Tool(
-    name="market_trends",
-    func=analyze_market_trends,
-    description="Analyze current market trends in book genres"
-)
-
-document_reader = Tool(
-    name="read_document",
-    func=read_document,
-    description="Read content from a document file"
-)
-
-document_writer = Tool(
-    name="write_document",
-    func=write_document,
-    description="Write content to a document file"
-)
-
-document_editor = Tool(
-    name="edit_document",
-    func=edit_document,
-    description="Apply edits to an existing document"
-)
-
-# Tool groups
-RESEARCH_TOOLS = [
-    bestseller_tool,
-    review_tool,
-    demographic_tool,
-    market_tool
-]
-
-WRITING_TOOLS = [
-    document_reader,
-    document_writer,
-    document_editor
-]
+@tool
+def python_repl_tool(
+    code: Annotated[str, "The python code to execute to generate your chart."],
+):
+    """Use this to execute python code."""
+    try:
+        result = repl.run(code)
+    except BaseException as e:
+        return f"Failed to execute. Error: {repr(e)}"
+    return f"Successfully executed:\n```python\n{code}\n```\nStdout: {result}"
