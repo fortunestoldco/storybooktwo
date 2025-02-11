@@ -1,20 +1,13 @@
-"""Tools available to the hierarchical team agent."""
-
-from __future__ import annotations
+"""Tool definitions for the hierarchical team agent."""
 
 from typing import Annotated, Dict, List, Optional
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from langchain_core.tools import tool
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_experimental.utilities import PythonREPL
+from .configuration import WORKING_DIRECTORY
 
-# Initialize working directory
-_TEMP_DIRECTORY = TemporaryDirectory()
-WORKING_DIRECTORY = Path(_TEMP_DIRECTORY.name)
-
-# Research Tools
+# Initialize tools
 tavily_tool = TavilySearchResults(max_results=5)
 
 @tool
@@ -29,12 +22,11 @@ def scrape_webpages(urls: List[str]) -> str:
         ]
     )
 
-# Document Writing Tools
 @tool
 def create_outline(
     points: Annotated[List[str], "List of main points or sections."],
     file_name: Annotated[str, "File path to save the outline."],
-) -> str:
+) -> Annotated[str, "Path of the saved outline file."]:
     """Create and save an outline."""
     with (WORKING_DIRECTORY / file_name).open("w") as file:
         for i, point in enumerate(points):
@@ -58,7 +50,7 @@ def read_document(
 def write_document(
     content: Annotated[str, "Text content to be written into the document."],
     file_name: Annotated[str, "File path to save the document."],
-) -> str:
+) -> Annotated[str, "Path of the saved document file."]:
     """Create and save a text document."""
     with (WORKING_DIRECTORY / file_name).open("w") as file:
         file.write(content)
@@ -69,9 +61,9 @@ def edit_document(
     file_name: Annotated[str, "Path of the document to be edited."],
     inserts: Annotated[
         Dict[int, str],
-        "Dictionary where key is line number (1-indexed) and value is text to insert.",
+        "Dictionary where key is the line number (1-indexed) and value is the text to be inserted at that line.",
     ],
-) -> str:
+) -> Annotated[str, "Path of the edited document file."]:
     """Edit a document by inserting text at specific line numbers."""
     with (WORKING_DIRECTORY / file_name).open("r") as file:
         lines = file.readlines()
@@ -87,14 +79,14 @@ def edit_document(
         file.writelines(lines)
     return f"Document edited and saved to {file_name}"
 
-# Chart Generation Tool
+# Create Python REPL tool
 repl = PythonREPL()
 
 @tool
 def python_repl_tool(
     code: Annotated[str, "The python code to execute to generate your chart."],
-) -> str:
-    """Execute python code for chart generation."""
+):
+    """Use this to execute python code."""
     try:
         result = repl.run(code)
     except BaseException as e:

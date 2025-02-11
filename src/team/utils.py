@@ -1,122 +1,69 @@
-"""Utility functions for the hierarchical team agent."""
+"""Helper functions for the hierarchical team agent."""
 
-from __future__ import annotations
+from typing import Dict, List, Literal, TypedDict
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import HumanMessage
+from langgraph.graph import StateGraph
+from .configuration import State
 
-from datetime import datetime, timezone
-from typing import Optional, Type, TypeVar, Dict, Literal
+def make_supervisor_node(llm: BaseChatModel, members: list[str]) -> str:
+    """Create a supervisor node for managing team members."""
+    options = ["FINISH"] + members
+    system_prompt = (
+        "You are a supervisor tasked with managing a conversation between the"
+        f" following workers: {members}. Given the following user request,"
+        " respond with the worker to act next. Each worker will perform a"
+        " task and respond with their results and status. When finished,"
+        " respond with FINISH."
+    )
 
-from langchain_core.messages import AIMessage, BaseMessage
-from langchain_core.language_models import BaseChatModel
-from langchain_openai import ChatOpenAI
-from langgraph.graph import StateGraph, START
-from langgraph.prebuilt import create_react_agent
+    class Router(TypedDict):
+        """Worker to route to next. If no workers needed, route to FINISH."""
+        next: Literal[*options]
 
-T = TypeVar("T")
-
-
-def get_current_time() -> str:
-    """Get the current time in ISO format."""
-    return datetime.now(tz=timezone.utc).isoformat()
-
-
-def load_chat_model(model_name: str) -> BaseChatModel:
-    """Load a chat model based on the model name."""
-    return ChatOpenAI(model=model_name)
-
-
-def create_team_supervisor(
-    llm: BaseChatModel,
-    members: list[str],
-    system_prompt: str,
-    state_class: Optional[Type[T]] = None,
-) -> tuple:
-    """Create a supervisor node for a team."""
-    def supervisor_node(state):
+    def supervisor_node(state: State) -> Dict:
+        """An LLM-based router."""
         messages = [
-            {"role": "system", "content": system_prompt.format(system_time=get_current_time())},
-        ] + state.messages
-        
-        response = llm.invoke(messages)
-        
-        if state.is_last_step:
-            return {
-                "messages": [
-                    AIMessage(
-                        content="Task completed in allocated steps.",
-                    )
-                ]
-            }
-        
-        return {"messages": [response]}
+            {"role": "system", "content": system_prompt},
+        ] + state["messages"]
+        response = llm.with_structured_output(Router).invoke(messages)
+        goto = response["next"]
+        if goto == "FINISH":
+            goto = "__end__"
+        return {"next": goto, "goto": goto}
 
     return supervisor_node
 
-
-def create_worker_node(
-    llm: BaseChatModel,
-    tools: list,
-    system_prompt: str,
-    state_class: Optional[Type[T]] = None,
-):
-    """Create a worker node with specified tools."""
-    agent = create_react_agent(
-        llm,
-        tools,
-        system_prompt.format(system_time=get_current_time())
-    )
-
-    def worker_node(state):
-        result = agent.invoke(state)
-        
-        if state.is_last_step:
-            return {
-                "messages": [
-                    AIMessage(
-                        content="Task completed in allocated steps.",
-                    )
-                ]
-            }
-        
-        return {
-            "messages": [
-                AIMessage(content=result["messages"][-1].content)
-            ]
-        }
-
-    return worker_node
-
-
 def build_team_graph(
     supervisor_node,
-    worker_nodes: dict,
-    state_class: Optional[Type[T]] = None,
+    team_nodes: Dict,
+    state_class: type = State
 ) -> StateGraph:
-    """Build a team graph with a supervisor and workers."""
+    """Build a team graph with a supervisor and team members."""
     builder = StateGraph(state_class)
     
-    # Add supervisor node
+    # Add supervisor
     builder.add_node("supervisor", supervisor_node)
     
-    # Add worker nodes
-    for name, node in worker_nodes.items():
+    # Add team members
+    for name, node in team_nodes.items():
         builder.add_node(name, node)
     
     # Add edges
-    builder.add_edge(START, "supervisor")
-    
-    # Add conditional edges
-    def route_team(state) -> Literal[tuple(worker_nodes.keys()) + ("__end__",)]:
-        if state.next == "FINISH":
-            return "__end__"
-        return state.next
-    
-    builder.add_conditional_edges(
-        "supervisor",
-        route_team,
-    )
-    
-    # Add edges back to supervisor
-    for name in worker_nodes:
+    builder.add_edge("START", "supervisor")
+    for name in team_nodes:
         builder.add_edge(name, "supervisor")
     
     return builder.compile()
+
+def create_team_node(agent, name: str):
+    """Create a team node with standardized message handling."""
+    def node(state: State) -> Dict:
+        result = agent.invoke(state)
+        return {
+            "messages": [
+                HumanMessage(content=result["messages"][-1].content, name=name)
+            ],
+            "goto": "supervisor",
+        }
+    return node
