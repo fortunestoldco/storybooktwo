@@ -1,6 +1,6 @@
 """Define the creative writing agent graph structure.
 
-Current Date and Time (UTC - YYYY-MM-DD HH:MM:SS formatted): 2025-02-11 22:52:03
+Current Date and Time (UTC - YYYY-MM-DD HH:MM:SS formatted): 2025-02-11 22:55:13
 Current User's Login: fortunestoldco
 """
 
@@ -17,7 +17,7 @@ from langchain.agents import create_openai_functions_agent
 from langchain.agents.format_scratchpad import format_to_openai_functions
 from langgraph.graph import Graph
 from langgraph.prebuilt.tool_executor import ToolExecutor
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 
 from src.team.configuration import (
     State, Configuration, StoryParameters, 
@@ -50,35 +50,66 @@ class StoryInput(BaseModel):
     )
     num_chapters: int = Field(
         default=10,
-        description="Number of chapters in the story",
-        ge=1,
-        le=50
+        description="Number of chapters in the story"
     )
     words_per_chapter: int = Field(
         default=2000,
-        description="Target words per chapter",
-        ge=500,
-        le=10000
+        description="Target words per chapter"
     )
 
-def validate_and_initialize(inputs: Dict | State | StoryInput) -> State:
+    @validator('num_chapters')
+    def validate_num_chapters(cls, v):
+        """Validate number of chapters."""
+        if v < 1:
+            raise ValueError("Number of chapters must be at least 1")
+        if v > 50:
+            raise ValueError("Number of chapters cannot exceed 50")
+        return v
+
+    @validator('words_per_chapter')
+    def validate_words_per_chapter(cls, v):
+        """Validate words per chapter."""
+        if v < 500:
+            raise ValueError("Words per chapter must be at least 500")
+        if v > 10000:
+            raise ValueError("Words per chapter cannot exceed 10,000")
+        return v
+
+    def to_parameters(self) -> StoryParameters:
+        """Convert input to StoryParameters."""
+        return StoryParameters(
+            starting_point=self.starting_point,
+            plot_points=self.plot_points,
+            intended_ending=self.intended_ending,
+            num_chapters=self.num_chapters,
+            words_per_chapter=self.words_per_chapter
+        )
+
+def process_input(inputs: Dict) -> Dict:
+    """Process and validate the input dictionary."""
+    try:
+        # Convert dict to StoryInput for validation
+        story_input = StoryInput(**inputs)
+        return {
+            "starting_point": story_input.starting_point,
+            "plot_points": story_input.plot_points,
+            "intended_ending": story_input.intended_ending,
+            "num_chapters": story_input.num_chapters,
+            "words_per_chapter": story_input.words_per_chapter
+        }
+    except Exception as e:
+        raise ValueError(f"Invalid input parameters: {str(e)}") from e
+
+def validate_and_initialize(inputs: Dict) -> State:
     """Validate input and create initial state."""
-    if isinstance(inputs, State):
-        if not inputs.story_parameters:
-            raise ValueError("State object must have story_parameters")
-        inputs.initialize_chapters()
-        return inputs
-        
-    if isinstance(inputs, dict):
-        inputs = StoryInput(**inputs)
+    # Process and validate inputs
+    processed_inputs = process_input(inputs)
     
-    story_parameters = StoryParameters(
-        starting_point=inputs.starting_point,
-        plot_points=inputs.plot_points,
-        intended_ending=inputs.intended_ending,
-        num_chapters=inputs.num_chapters,
-        words_per_chapter=inputs.words_per_chapter
-    )
+    # Create StoryInput instance
+    story_input = StoryInput(**processed_inputs)
+    
+    # Convert to StoryParameters
+    story_parameters = story_input.to_parameters()
     
     initial_message = SystemMessage(
         content=f"""Beginning story development with parameters:
@@ -116,27 +147,28 @@ def create_agent_node(
     
     agent = create_openai_functions_agent(llm, tools, prompt)
 
-    def run_agent(state: State) -> Dict:
+    def run_agent(state: Dict) -> Dict:
         """Execute agent with tools."""
-        message_history = config.get_message_history(state.session_id)
+        current_state = State(**state)
+        message_history = config.get_message_history(current_state.session_id)
         
         context = []
-        if state.story_parameters:
-            context.append(SystemMessage(content=state.story_parameters.to_prompt()))
-        if state.market_research and state.market_research.similar_books:
+        if current_state.story_parameters:
+            context.append(SystemMessage(content=current_state.story_parameters.to_prompt()))
+        if current_state.market_research and current_state.market_research.similar_books:
             context.append(SystemMessage(content=
-                f"Market Research:\n{json.dumps(state.market_research.dict(), indent=2)}"
+                f"Market Research:\n{json.dumps(current_state.market_research.dict(), indent=2)}"
             ))
         
         # Add chapter status
-        chapter_status = state.get_chapter_status()
+        chapter_status = current_state.get_chapter_status()
         context.append(SystemMessage(content=
             f"Chapter Status:\n{json.dumps(chapter_status, indent=2)}"
         ))
         
         agent_input = {
             "history": message_history.messages + context,
-            "messages": state.get_messages(),
+            "messages": current_state.get_messages(),
             "agent_scratchpad": format_to_openai_functions([])
         }
         
@@ -145,10 +177,8 @@ def create_agent_node(
         
         message_history.add_ai_message(AIMessage(content=response))
         
-        return {
-            "messages": state.messages + [MessageWrapper.from_message(AIMessage(content=response))],
-            "next": "supervisor"
-        }
+        current_state.add_message(AIMessage(content=response))
+        return current_state.dict()
     
     return run_agent
 
@@ -185,29 +215,30 @@ Respond with next team member to act or 'FINISH' if complete."""),
         MessagesPlaceholder(variable_name="messages")
     ])
 
-    def decide_next(state: State) -> Dict:
+    def decide_next(state: Dict) -> Dict:
         """Route between team members."""
-        message_history = config.get_message_history(state.session_id)
+        current_state = State(**state)
+        message_history = config.get_message_history(current_state.session_id)
         
         context_messages = []
-        if state.story_parameters:
+        if current_state.story_parameters:
             context_messages.append(SystemMessage(content=
-                f"Story Parameters:\n{state.story_parameters.to_prompt()}"
+                f"Story Parameters:\n{current_state.story_parameters.to_prompt()}"
             ))
-        if state.market_research and state.market_research.similar_books:
+        if current_state.market_research and current_state.market_research.similar_books:
             context_messages.append(SystemMessage(content=
-                f"Market Research:\n{json.dumps(state.market_research.dict(), indent=2)}"
+                f"Market Research:\n{json.dumps(current_state.market_research.dict(), indent=2)}"
             ))
             
         # Add chapter status
-        chapter_status = state.get_chapter_status()
+        chapter_status = current_state.get_chapter_status()
         context_messages.append(SystemMessage(content=
             f"Chapter Status:\n{json.dumps(chapter_status, indent=2)}"
         ))
         
         formatted_prompt = prompt.format_messages(
             history=message_history.messages + context_messages,
-            messages=state.get_messages()
+            messages=current_state.get_messages()
         )
         
         response = llm.invoke(formatted_prompt)
@@ -215,10 +246,9 @@ Respond with next team member to act or 'FINISH' if complete."""),
         
         message_history.add_ai_message(response)
         
-        return {
-            "messages": state.messages + [MessageWrapper.from_message(response)],
-            "next": next_step
-        }
+        current_state.add_message(response)
+        current_state.next = next_step
+        return current_state.dict()
     
     return decide_next
 
@@ -281,47 +311,40 @@ def create_graph(config: Optional[Configuration] = None) -> Graph:
     workflow.add_edge("start", "supervisor")
     
     # Add conditional edges
-    def route_agents(state: Dict) -> List[str]:
+    def route_to_next(state: Dict) -> List[str]:
         next_step = state.get("next", "")
         if next_step == "FINISH":
             return []
-        return [next_step] if next_step in {**research_agents, **writing_agents} else []
+        
+        valid_nodes = {
+            **research_agents,
+            **writing_agents,
+            "research_supervisor": research_supervisor,
+            "writing_supervisor": writing_supervisor,
+            "supervisor": top_supervisor
+        }
+        
+        return [next_step] if next_step in valid_nodes else []
 
-    def route_supervisors(state: Dict) -> List[str]:
-        next_step = state.get("next", "")
-        if next_step == "FINISH":
-            return []
-        return [next_step] if next_step in ["research_supervisor", "writing_supervisor", "supervisor"] else []
-
-    # Connect supervisors
-    workflow.add_conditional_edges(
+    # Connect nodes with conditional routing
+    for node in [
         "supervisor",
-        route_supervisors,
-        ["research_supervisor", "writing_supervisor"]
-    )
-
-    # Connect agents to their supervisors
-    workflow.add_conditional_edges(
         "research_supervisor",
-        route_agents,
-        list(research_agents.keys())
-    )
-
-    workflow.add_conditional_edges(
         "writing_supervisor",
-        route_agents,
-        list(writing_agents.keys())
-    )
-
-    # Add return edges
-    for agent in research_agents:
-        workflow.add_edge(agent, "research_supervisor")
-    
-    for agent in writing_agents:
-        workflow.add_edge(agent, "writing_supervisor")
-
-    workflow.add_edge("research_supervisor", "supervisor")
-    workflow.add_edge("writing_supervisor", "supervisor")
+        *research_agents.keys(),
+        *writing_agents.keys()
+    ]:
+        workflow.add_conditional_edges(
+            node,
+            route_to_next,
+            [
+                "supervisor",
+                "research_supervisor",
+                "writing_supervisor",
+                *research_agents.keys(),
+                *writing_agents.keys()
+            ]
+        )
 
     # Set entry point
     workflow.set_entry_point("start")
@@ -330,4 +353,3 @@ def create_graph(config: Optional[Configuration] = None) -> Graph:
 
 # Create the graph instance
 graph = create_graph()
-
