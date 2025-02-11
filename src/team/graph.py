@@ -1,6 +1,6 @@
 """Define the creative writing agent graph structure.
 
-Current Date and Time (UTC - YYYY-MM-DD HH:MM:SS formatted): 2025-02-11 22:43:06
+Current Date and Time (UTC - YYYY-MM-DD HH:MM:SS formatted): 2025-02-11 22:48:14
 Current User's Login: fortunestoldco
 """
 
@@ -15,13 +15,14 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, System
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.agents import create_openai_functions_agent
 from langchain.agents.format_scratchpad import format_to_openai_functions
-from langgraph.graph import StateGraph
+from langgraph.graph import StateGraph, Graph
 from langgraph.prebuilt.tool_executor import ToolExecutor
 from pydantic import BaseModel, Field
 
 from src.team.configuration import (
     State, Configuration, StoryParameters, 
-    MarketResearch, MessageWrapper
+    MarketResearch, MessageWrapper,
+    ChapterStatus
 )
 from src.team.prompts import (
     RESEARCH_SYSTEM_PROMPT,
@@ -47,43 +48,54 @@ class StoryInput(BaseModel):
         ...,
         description="The desired conclusion of the story"
     )
+    num_chapters: int = Field(
+        default=10,
+        description="Number of chapters in the story",
+        ge=1,
+        le=50
+    )
+    words_per_chapter: int = Field(
+        default=2000,
+        description="Target words per chapter",
+        ge=500,
+        le=10000
+    )
 
 def create_initial_state(state_input: Dict | State | StoryInput) -> State:
-    """Create the initial state from the input.
-    
-    Args:
-        state_input: Either a StoryInput object, State object, or a dict with story parameters
-        
-    Returns:
-        Initial state object
-    """
-    # If it's already a State object, we just need to ensure it has the required fields
+    """Create the initial state from the input."""
     if isinstance(state_input, State):
         if not state_input.story_parameters:
             raise ValueError("State object must have story_parameters")
+        state_input.initialize_chapters()
         return state_input
         
-    # If it's a dict, convert to StoryInput
     if isinstance(state_input, dict):
         state_input = StoryInput(**state_input)
     
-    # Now we should have a StoryInput object
     story_parameters = StoryParameters(
         starting_point=state_input.starting_point,
         plot_points=state_input.plot_points,
-        intended_ending=state_input.intended_ending
+        intended_ending=state_input.intended_ending,
+        num_chapters=state_input.num_chapters,
+        words_per_chapter=state_input.words_per_chapter
     )
     
     initial_message = SystemMessage(
-        content=f"Beginning story development with parameters:\n{story_parameters.to_prompt()}"
+        content=f"""Beginning story development with parameters:
+{story_parameters.to_prompt()}"""
     )
     
-    return State(
+    state = State(
         messages=[MessageWrapper.from_message(initial_message)],
         story_parameters=story_parameters,
         market_research=MarketResearch(),
         next=""
     )
+    
+    state.initialize_chapters()
+    state.market_research.chapter_distribution = story_parameters.get_chapter_distribution()
+    
+    return state
 
 def create_agent_node(
     llm: ChatOpenAI,
@@ -115,6 +127,12 @@ def create_agent_node(
             context.append(SystemMessage(content=
                 f"Market Research:\n{json.dumps(state.market_research.dict(), indent=2)}"
             ))
+        
+        # Add chapter status
+        chapter_status = state.get_chapter_status()
+        context.append(SystemMessage(content=
+            f"Chapter Status:\n{json.dumps(chapter_status, indent=2)}"
+        ))
         
         agent_input = {
             "history": message_history.messages + context,
@@ -148,7 +166,7 @@ Your responsibilities:
 2. Determine next steps based on the story requirements
 3. Ensure all plot points are being addressed
 4. Maintain consistency with target demographic
-5. Coordinate between research and writing teams
+5. Track chapter progress and word count goals
 
 For research phase:
 - Ensure market analysis is thorough
@@ -156,6 +174,8 @@ For research phase:
 - Check that improvement opportunities are identified
 
 For writing phase:
+- Track chapter completion status
+- Ensure word count targets are being met
 - Verify plot points are being incorporated
 - Ensure tone matches target demographic
 - Check that market research insights are being used
@@ -178,6 +198,12 @@ Respond with next team member to act or 'FINISH' if complete."""),
             context_messages.append(SystemMessage(content=
                 f"Market Research:\n{json.dumps(state.market_research.dict(), indent=2)}"
             ))
+            
+        # Add chapter status
+        chapter_status = state.get_chapter_status()
+        context_messages.append(SystemMessage(content=
+            f"Chapter Status:\n{json.dumps(chapter_status, indent=2)}"
+        ))
         
         formatted_prompt = prompt.format_messages(
             history=message_history.messages + context_messages,
@@ -196,22 +222,14 @@ Respond with next team member to act or 'FINISH' if complete."""),
     
     return decide_next
 
-def create_graph(config: Optional[Configuration] = None) -> StateGraph:
+def create_graph(config: Optional[Configuration] = None) -> Graph:
     """Create the creative writing agent graph."""
     if config is None:
         config = Configuration()
 
-    # Create the workflow
-    workflow = StateGraph(State)
+    workflow = Graph()
     
     # Add input validator
-    def validate_and_initialize(inputs: Dict | State | StoryInput) -> State:
-        """Validate input and create initial state."""
-        try:
-            return create_initial_state(inputs)
-        except Exception as e:
-            raise ValueError(f"Invalid input: {str(e)}") from e
-    
     workflow.add_node("start", validate_and_initialize)
     
     # Create LLM
@@ -259,29 +277,30 @@ def create_graph(config: Optional[Configuration] = None) -> StateGraph:
     workflow.add_node("writing_supervisor", writing_supervisor)
     workflow.add_node("supervisor", top_supervisor)
 
-    # Add conditional edges using state's next field
+    # Add edges
     workflow.add_edge("start", "supervisor")
     
-    # Set up agent routing
-    def route_agents(state: State) -> List[str]:
-        next_step = state.next
+    # Add conditional edges
+    def route_agents(state: Dict) -> List[str]:
+        next_step = state.get("next", "")
         if next_step == "FINISH":
             return []
         return [next_step] if next_step in {**research_agents, **writing_agents} else []
 
-    def route_supervisors(state: State) -> List[str]:
-        next_step = state.next
+    def route_supervisors(state: Dict) -> List[str]:
+        next_step = state.get("next", "")
         if next_step == "FINISH":
             return []
         return [next_step] if next_step in ["research_supervisor", "writing_supervisor", "supervisor"] else []
 
-    # Add conditional edges
+    # Connect supervisors
     workflow.add_conditional_edges(
         "supervisor",
         route_supervisors,
         ["research_supervisor", "writing_supervisor"]
     )
 
+    # Connect agents to their supervisors
     workflow.add_conditional_edges(
         "research_supervisor",
         route_agents,
@@ -294,7 +313,7 @@ def create_graph(config: Optional[Configuration] = None) -> StateGraph:
         list(writing_agents.keys())
     )
 
-    # Add return edges to supervisors
+    # Add return edges
     for agent in research_agents:
         workflow.add_edge(agent, "research_supervisor")
     
