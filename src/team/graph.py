@@ -1,10 +1,10 @@
 """Define the creative writing agent graph structure.
 
-Current Date and Time (UTC - YYYY-MM-DD HH:MM:SS formatted): 2025-02-11 22:30:07
+Current Date and Time (UTC - YYYY-MM-DD HH:MM:SS formatted): 2025-02-11 22:32:58
 Current User's Login: fortunestoldco
 """
 
-from typing import Dict, List, Optional, Callable, Any, Annotated, TypeVar
+from typing import Dict, List, Optional, Callable, Any, Annotated, TypeVar, cast
 import os
 import json
 from datetime import datetime
@@ -15,7 +15,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, System
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.agents import create_openai_functions_agent
 from langchain.agents.format_scratchpad import format_to_openai_functions
-from langgraph.graph import Graph, StateGraph
+from langgraph.graph import StateGraph
 from langgraph.prebuilt.tool_executor import ToolExecutor
 from pydantic import BaseModel, Field
 
@@ -68,68 +68,6 @@ def create_initial_state(story_input: Dict) -> State:
         next=""
     )
 
-def create_supervisor_node(
-    llm: ChatOpenAI,
-    team_members: List[str],
-    config: Configuration,
-    name: str = "supervisor"
-) -> Callable:
-    """Create a supervisor node that manages team members."""
-    prompt = ChatPromptTemplate.from_messages([
-        SystemMessage(content=f"""You are the {name} coordinating the following team: {', '.join(team_members)}.
-Your responsibilities:
-1. Review current progress and team outputs
-2. Determine next steps based on the story requirements
-3. Ensure all plot points are being addressed
-4. Maintain consistency with target demographic
-5. Coordinate between research and writing teams
-
-For research phase:
-- Ensure market analysis is thorough
-- Verify demographic targeting is clear
-- Check that improvement opportunities are identified
-
-For writing phase:
-- Verify plot points are being incorporated
-- Ensure tone matches target demographic
-- Check that market research insights are being used
-
-Respond with next team member to act or 'FINISH' if complete."""),
-        MessagesPlaceholder(variable_name="history"),
-        MessagesPlaceholder(variable_name="messages")
-    ])
-
-    def decide_next(state: State) -> Dict:
-        """Determine the next step based on current state."""
-        message_history = config.get_message_history(state.session_id)
-        
-        context_messages = []
-        if state.story_parameters:
-            context_messages.append(SystemMessage(content=
-                f"Story Parameters:\n{state.story_parameters.to_prompt()}"
-            ))
-        if state.market_research and state.market_research.similar_books:
-            context_messages.append(SystemMessage(content=
-                f"Market Research:\n{json.dumps(state.market_research.dict(), indent=2)}"
-            ))
-        
-        formatted_prompt = prompt.format_messages(
-            history=message_history.messages + context_messages,
-            messages=state.get_messages()
-        )
-        
-        response = llm.invoke(formatted_prompt)
-        next_step = response.content.strip()
-        
-        message_history.add_ai_message(response)
-        
-        return {
-            "messages": state.messages + [MessageWrapper.from_message(response)],
-            "next": next_step
-        }
-    
-    return decide_next
-
 def create_agent_node(
     llm: ChatOpenAI,
     tools: List,
@@ -179,14 +117,76 @@ def create_agent_node(
     
     return run_agent
 
-def create_graph(config: Optional[Configuration] = None) -> Graph:
+def create_supervisor_node(
+    llm: ChatOpenAI,
+    team_members: List[str],
+    config: Configuration,
+    name: str = "supervisor"
+) -> Callable:
+    """Create a supervisor node that manages team members."""
+    prompt = ChatPromptTemplate.from_messages([
+        SystemMessage(content=f"""You are the {name} coordinating the following team: {', '.join(team_members)}.
+Your responsibilities:
+1. Review current progress and team outputs
+2. Determine next steps based on the story requirements
+3. Ensure all plot points are being addressed
+4. Maintain consistency with target demographic
+5. Coordinate between research and writing teams
+
+For research phase:
+- Ensure market analysis is thorough
+- Verify demographic targeting is clear
+- Check that improvement opportunities are identified
+
+For writing phase:
+- Verify plot points are being incorporated
+- Ensure tone matches target demographic
+- Check that market research insights are being used
+
+Respond with next team member to act or 'FINISH' if complete."""),
+        MessagesPlaceholder(variable_name="history"),
+        MessagesPlaceholder(variable_name="messages")
+    ])
+
+    def decide_next(state: State) -> Dict:
+        """Route between team members."""
+        message_history = config.get_message_history(state.session_id)
+        
+        context_messages = []
+        if state.story_parameters:
+            context_messages.append(SystemMessage(content=
+                f"Story Parameters:\n{state.story_parameters.to_prompt()}"
+            ))
+        if state.market_research and state.market_research.similar_books:
+            context_messages.append(SystemMessage(content=
+                f"Market Research:\n{json.dumps(state.market_research.dict(), indent=2)}"
+            ))
+        
+        formatted_prompt = prompt.format_messages(
+            history=message_history.messages + context_messages,
+            messages=state.get_messages()
+        )
+        
+        response = llm.invoke(formatted_prompt)
+        next_step = response.content.strip()
+        
+        message_history.add_ai_message(response)
+        
+        return {
+            "messages": state.messages + [MessageWrapper.from_message(response)],
+            "next": next_step
+        }
+    
+    return decide_next
+
+def create_graph(config: Optional[Configuration] = None) -> StateGraph:
     """Create the creative writing agent graph."""
     if config is None:
         config = Configuration()
 
     # Create the workflow
-    workflow = Graph()
-
+    workflow = StateGraph(State)
+    
     # Add nodes
     workflow.add_node("start", create_initial_state)
     
@@ -235,30 +235,50 @@ def create_graph(config: Optional[Configuration] = None) -> Graph:
     workflow.add_node("writing_supervisor", writing_supervisor)
     workflow.add_node("supervisor", top_supervisor)
 
-    # Add edges
+    # Add conditional edges using state's next field
     workflow.add_edge("start", "supervisor")
     
-    # Connect research team
+    # Set up agent routing
+    def route_agents(state: State) -> List[str]:
+        next_step = state.next
+        if next_step == "FINISH":
+            return []
+        return [next_step] if next_step in {**research_agents, **writing_agents} else []
+
+    def route_supervisors(state: State) -> List[str]:
+        next_step = state.next
+        if next_step == "FINISH":
+            return []
+        return [next_step] if next_step in ["research_supervisor", "writing_supervisor", "supervisor"] else []
+
+    # Add conditional edges
+    workflow.add_conditional_edges(
+        "supervisor",
+        route_supervisors,
+        ["research_supervisor", "writing_supervisor"]
+    )
+
+    workflow.add_conditional_edges(
+        "research_supervisor",
+        route_agents,
+        list(research_agents.keys())
+    )
+
+    workflow.add_conditional_edges(
+        "writing_supervisor",
+        route_agents,
+        list(writing_agents.keys())
+    )
+
+    # Add return edges to supervisors
     for agent in research_agents:
-        workflow.add_edge("research_supervisor", agent)
         workflow.add_edge(agent, "research_supervisor")
     
-    # Connect writing team
     for agent in writing_agents:
-        workflow.add_edge("writing_supervisor", agent)
         workflow.add_edge(agent, "writing_supervisor")
-    
-    # Connect to top supervisor
-    workflow.add_edge("supervisor", "research_supervisor")
-    workflow.add_edge("supervisor", "writing_supervisor")
+
     workflow.add_edge("research_supervisor", "supervisor")
     workflow.add_edge("writing_supervisor", "supervisor")
-
-    # Add end condition
-    workflow.add_edge_filter(
-        "supervisor",
-        lambda x: [] if x["next"] == "FINISH" else [x["next"]]
-    )
 
     # Set entry point
     workflow.set_entry_point("start")
