@@ -1,128 +1,64 @@
 """Tools for the creative writing agent.
 
-Current Date and Time (UTC): 2025-02-11 22:02:39
+Current Date and Time (UTC): 2025-02-11 22:09:41
 Current User's Login: fortunestoldco
 """
 
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 import json
 import requests
 from bs4 import BeautifulSoup
 from langchain.tools import Tool
 from pydantic import BaseModel, Field, ConfigDict
 
-class BookSearchResult(BaseModel):
-    """Structure for book search results."""
+from .configuration import (
+    SimilarBook,
+    Demographics,
+    MarketAnalysis,
+    MarketResearch
+)
+
+class SearchQuery(BaseModel):
+    """Search query parameters."""
     model_config = ConfigDict(arbitrary_types_allowed=True)
     
-    title: str = Field(..., description="Book title")
-    author: str = Field(..., description="Book author")
-    rating: float = Field(..., description="Average rating")
-    reviews_count: int = Field(..., description="Number of reviews")
-    genre: str = Field(..., description="Book genre")
-    popularity_score: float = Field(..., description="Calculated popularity score")
-    url: str = Field(..., description="URL to book details")
-    platform: str = Field(..., description="Platform (Amazon, Waterstones, etc.)")
+    query: str = Field(..., description="Search query string")
+    platform: str = Field(..., description="Platform to search (e.g., Amazon, Goodreads)")
+    filters: Dict[str, Any] = Field(default_factory=dict, description="Search filters")
 
-class DemographicInfo(BaseModel):
-    """Structure for demographic information."""
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    
-    age_range: str = Field(..., description="Target age range")
-    gender_split: Dict[str, float] = Field(..., description="Gender distribution")
-    interests: List[str] = Field(..., description="Common interests")
-    reading_level: str = Field(..., description="Reading level")
-    preferred_genres: List[str] = Field(..., description="Preferred genres")
-
-class ReviewAnalysis(BaseModel):
-    """Structure for review analysis."""
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    
-    positive_points: List[str] = Field(..., description="Common positive feedback")
-    negative_points: List[str] = Field(..., description="Common criticisms")
-    demographic_info: DemographicInfo = Field(..., description="Reader demographic information")
-    rating_distribution: Dict[str, float] = Field(..., description="Distribution of ratings")
-    review_quotes: List[str] = Field(..., description="Notable review quotes")
-
-class MarketTrends(BaseModel):
-    """Structure for market trends."""
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    
-    trending_themes: List[str] = Field(..., description="Currently trending themes")
-    sales_data: Dict[str, float] = Field(..., description="Sales metrics")
-    growth_rate: float = Field(..., description="Market growth rate")
-    competition_level: str = Field(..., description="Market competition level")
-    opportunities: List[str] = Field(..., description="Market opportunities")
-
-def search_bestsellers(query: str) -> List[BookSearchResult]:
+async def search_bestsellers(query: str) -> List[SimilarBook]:
     """Search bestseller lists across multiple platforms."""
-    # Implementation would include:
-    # - NYT Bestsellers API
-    # - Amazon Bestsellers
-    # - Waterstones Top Sellers
-    # - Goodreads Popular Books
+    # Implementation using real APIs would go here
     return []
 
-def analyze_book_reviews(book_url: str) -> ReviewAnalysis:
+async def analyze_book_reviews(book_url: str) -> List[Dict[str, str]]:
     """Analyze reviews for a specific book."""
-    # Placeholder implementation
-    return ReviewAnalysis(
-        positive_points=[],
-        negative_points=[],
-        demographic_info=DemographicInfo(
-            age_range="",
-            gender_split={},
-            interests=[],
-            reading_level="",
-            preferred_genres=[]
-        ),
-        rating_distribution={},
-        review_quotes=[]
-    )
-
-def search_editorial_reviews(title: str) -> List[Dict[str, str]]:
-    """Search for professional editorial reviews."""
-    # Implementation would include:
-    # - Literary review sites
-    # - Book critic blogs
-    # - Professional review aggregators
+    # Implementation using real APIs would go here
     return []
 
-def analyze_market_trends(genre: str) -> MarketTrends:
-    """Analyze current market trends in a genre."""
-    # Placeholder implementation
-    return MarketTrends(
-        trending_themes=[],
-        sales_data={},
-        growth_rate=0.0,
-        competition_level="",
-        opportunities=[]
+async def get_demographic_data(genre: str) -> Demographics:
+    """Get demographic data for a genre."""
+    # Implementation using real APIs would go here
+    return Demographics(
+        age_range="",
+        interests=[],
+        reading_level="",
+        market_segment=""
     )
 
-# Tool definitions
-bestseller_research_tool = Tool(
-    name="bestseller_research",
-    func=search_bestsellers,
-    description="Search bestseller lists across multiple platforms to find popular books in a given genre or theme"
-)
+async def analyze_market_trends(genre: str) -> MarketAnalysis:
+    """Analyze current market trends in a genre."""
+    # Implementation using real APIs would go here
+    return MarketAnalysis()
 
-review_analysis_tool = Tool(
-    name="review_analysis",
-    func=analyze_book_reviews,
-    description="Analyze reader reviews and ratings for a specific book to understand reception and demographic appeal"
-)
-
-editorial_review_tool = Tool(
-    name="editorial_review",
-    func=search_editorial_reviews,
-    description="Search for professional editorial reviews and critic opinions on books"
-)
-
-market_trends_tool = Tool(
-    name="market_trends",
-    func=analyze_market_trends,
-    description="Analyze current market trends, sales data, and popularity metrics for book genres"
-)
+class DocumentOperation(BaseModel):
+    """Document operation parameters."""
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
+    filename: str = Field(..., description="Document filename")
+    content: Optional[str] = Field(None, description="Content to write")
+    operation: str = Field(..., description="Operation type (read/write/edit)")
+    edits: Optional[List[Dict[str, str]]] = Field(None, description="Edit operations")
 
 # Document handling tools
 def read_document(filename: str) -> str:
@@ -130,22 +66,51 @@ def read_document(filename: str) -> str:
     with open(filename, 'r') as f:
         return f.read()
 
-def write_document(filename: str, content: str) -> str:
+def write_document(op: DocumentOperation) -> str:
     """Write content to a document."""
-    with open(filename, 'w') as f:
-        f.write(content)
-    return f"Written {len(content)} characters to {filename}"
+    with open(op.filename, 'w') as f:
+        f.write(op.content)
+    return f"Written {len(op.content)} characters to {op.filename}"
 
-def edit_document(filename: str, edits: List[Dict[str, str]]) -> str:
+def edit_document(op: DocumentOperation) -> str:
     """Apply edits to a document."""
-    content = read_document(filename)
-    for edit in edits:
-        # Apply each edit operation
-        pass
-    write_document(filename, content)
-    return f"Applied {len(edits)} edits to {filename}"
+    content = read_document(op.filename)
+    if op.edits:
+        for edit in op.edits:
+            # Apply edits (implementation would go here)
+            pass
+    write_document(DocumentOperation(
+        filename=op.filename,
+        content=content,
+        operation="write"
+    ))
+    return f"Applied {len(op.edits)} edits to {op.filename}"
 
 # Tool instances
+bestseller_tool = Tool(
+    name="bestseller_research",
+    func=search_bestsellers,
+    description="Search bestseller lists across multiple platforms"
+)
+
+review_tool = Tool(
+    name="review_analysis",
+    func=analyze_book_reviews,
+    description="Analyze reader reviews and ratings for books"
+)
+
+demographic_tool = Tool(
+    name="demographic_analysis",
+    func=get_demographic_data,
+    description="Get demographic data for book genres"
+)
+
+market_tool = Tool(
+    name="market_trends",
+    func=analyze_market_trends,
+    description="Analyze current market trends in book genres"
+)
+
 document_reader = Tool(
     name="read_document",
     func=read_document,
@@ -164,12 +129,12 @@ document_editor = Tool(
     description="Apply edits to an existing document"
 )
 
-# Group tools by team
+# Tool groups
 RESEARCH_TOOLS = [
-    bestseller_research_tool,
-    review_analysis_tool,
-    editorial_review_tool,
-    market_trends_tool
+    bestseller_tool,
+    review_tool,
+    demographic_tool,
+    market_tool
 ]
 
 WRITING_TOOLS = [
