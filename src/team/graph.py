@@ -100,22 +100,22 @@ def create_agent_node(
             context.append(SystemMessage(content=state.story_parameters.to_prompt()))
         if state.market_research and state.market_research.similar_books:
             context.append(SystemMessage(content=
-                "Market Research:\n" + json.dumps(state.market_research.__dict__, indent=2)
+                "Market Research:\n" + json.dumps(state.market_research.dict(), indent=2)
             ))
         
         agent_input = {
             "history": message_history.messages + context,
-            "messages": state.get("messages", []),
+            "messages": state.get_messages(),
             "agent_scratchpad": format_to_openai_functions([])
         }
         
         output = agent.invoke(agent_input)
         response = output.return_values["output"]
         
-        message_history.add_ai_message(SystemMessage(content=response))
+        message_history.add_ai_message(AIMessage(content=response))
         
         return {
-            "messages": state.get("messages", []) + [SystemMessage(content=response)],
+            "messages": state.messages + [MessageWrapper.from_message(AIMessage(content=response))],
             "next": "supervisor"
         }
     

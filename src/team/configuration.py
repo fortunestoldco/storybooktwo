@@ -1,13 +1,38 @@
 """Configuration and state classes for the creative writing agent.
 
-Current Date and Time (UTC): 2025-02-11 22:11:24
+Current Date and Time (UTC): 2025-02-11 22:12:57
 Current User's Login: fortunestoldco
 """
 
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Union
 from pydantic import BaseModel, Field, ConfigDict
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langchain_mongodb.chat_message_histories import MongoDBChatMessageHistory
+
+class MessageWrapper(BaseModel):
+    """Wrapper for BaseMessage to make it JSON serializable."""
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
+    type: str = Field(..., description="Message type (human/ai/system)")
+    content: str = Field(..., description="Message content")
+    
+    @classmethod
+    def from_message(cls, message: BaseMessage) -> "MessageWrapper":
+        """Create a wrapper from a BaseMessage."""
+        return cls(
+            type=message.__class__.__name__.lower().replace('message', ''),
+            content=message.content
+        )
+    
+    def to_message(self) -> BaseMessage:
+        """Convert wrapper back to BaseMessage."""
+        message_types = {
+            'human': HumanMessage,
+            'ai': AIMessage,
+            'system': SystemMessage
+        }
+        message_class = message_types.get(self.type, SystemMessage)
+        return message_class(content=self.content)
 
 class StoryParameters(BaseModel):
     """Parameters for story generation."""
@@ -66,9 +91,25 @@ class MarketResearch(BaseModel):
 
 class State(BaseModel):
     """Base state for team operations."""
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        json_schema_extra={
+            "properties": {
+                "messages": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "type": {"type": "string"},
+                            "content": {"type": "string"}
+                        }
+                    }
+                }
+            }
+        }
+    )
     
-    messages: List[BaseMessage] = Field(default_factory=list)
+    messages: List[MessageWrapper] = Field(default_factory=list)
     next: str = Field(default="")
     session_id: str = Field(default="default")
     story_parameters: Optional[StoryParameters] = None
@@ -79,6 +120,18 @@ class State(BaseModel):
         if hasattr(self, key):
             return getattr(self, key)
         return default
+    
+    @classmethod
+    def from_messages(cls, messages: List[BaseMessage], **kwargs) -> "State":
+        """Create State from a list of BaseMessages."""
+        return cls(
+            messages=[MessageWrapper.from_message(msg) for msg in messages],
+            **kwargs
+        )
+    
+    def get_messages(self) -> List[BaseMessage]:
+        """Get the actual messages from wrappers."""
+        return [msg.to_message() for msg in self.messages]
 
 class Configuration:
     """Configuration for the agent system."""
