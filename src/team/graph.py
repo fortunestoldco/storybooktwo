@@ -288,11 +288,7 @@ def create_graph(config: Optional[Configuration] = None) -> Graph:
         )
     }
 
-    # Add all agent nodes
-    for name, agent in {**research_agents, **writing_agents}.items():
-        workflow.add_node(name, agent)
-
-    # Create and add supervisors
+    # Create supervisors
     research_supervisor = create_supervisor_node(
         llm, list(research_agents.keys()), config, "research_supervisor"
     )
@@ -300,51 +296,102 @@ def create_graph(config: Optional[Configuration] = None) -> Graph:
         llm, list(writing_agents.keys()), config, "writing_supervisor"
     )
     top_supervisor = create_supervisor_node(
-        llm, ["research_team", "writing_team"], config, "top_supervisor"
+        llm, ["research_team", "writing_team"], config, "supervisor"
     )
 
+    # Add all nodes
+    for name, agent in {**research_agents, **writing_agents}.items():
+        workflow.add_node(name, agent)
+    
     workflow.add_node("research_supervisor", research_supervisor)
     workflow.add_node("writing_supervisor", writing_supervisor)
     workflow.add_node("supervisor", top_supervisor)
 
-    # Add edges
-    workflow.add_edge("start", "supervisor")
-    
-    # Add conditional edges
-    def route_to_next(state: Dict) -> List[str]:
+    # Set up hierarchical routing
+    def route_to_supervisor(state: Dict) -> List[str]:
+        """Route agents back to their supervisors."""
         next_step = state.get("next", "")
         if next_step == "FINISH":
             return []
-        
-        valid_nodes = {
-            **research_agents,
-            **writing_agents,
-            "research_supervisor": research_supervisor,
-            "writing_supervisor": writing_supervisor,
-            "supervisor": top_supervisor
-        }
-        
-        return [next_step] if next_step in valid_nodes else []
+            
+        if next_step in research_agents:
+            return ["research_supervisor"]
+        elif next_step in writing_agents:
+            return ["writing_supervisor"]
+        elif next_step in ["research_supervisor", "writing_supervisor"]:
+            return ["supervisor"]
+        return []
 
-    # Connect nodes with conditional routing
-    for node in [
-        "supervisor",
-        "research_supervisor",
-        "writing_supervisor",
-        *research_agents.keys(),
-        *writing_agents.keys()
-    ]:
+    def route_from_supervisor(state: Dict) -> List[str]:
+        """Route from supervisors to their team members."""
+        next_step = state.get("next", "")
+        if next_step == "FINISH":
+            return []
+            
+        if next_step in research_agents and state.get("current_supervisor") == "research_supervisor":
+            return [next_step]
+        elif next_step in writing_agents and state.get("current_supervisor") == "writing_supervisor":
+            return [next_step]
+        return []
+
+    def route_from_top_supervisor(state: Dict) -> List[str]:
+        """Route from top supervisor to team supervisors."""
+        next_step = state.get("next", "")
+        if next_step == "FINISH":
+            return []
+            
+        if next_step in ["research_supervisor", "writing_supervisor"]:
+            return [next_step]
+        return []
+
+    # Add initial edge
+    workflow.add_edge("start", "supervisor")
+
+    # Add routing from agents to their supervisors
+    for agent in research_agents:
         workflow.add_conditional_edges(
-            node,
-            route_to_next,
-            [
-                "supervisor",
-                "research_supervisor",
-                "writing_supervisor",
-                *research_agents.keys(),
-                *writing_agents.keys()
-            ]
+            agent,
+            route_to_supervisor,
+            ["research_supervisor"]
         )
+
+    for agent in writing_agents:
+        workflow.add_conditional_edges(
+            agent,
+            route_to_supervisor,
+            ["writing_supervisor"]
+        )
+
+    # Add routing from supervisors to their agents
+    workflow.add_conditional_edges(
+        "research_supervisor",
+        route_from_supervisor,
+        list(research_agents.keys())
+    )
+    workflow.add_conditional_edges(
+        "writing_supervisor",
+        route_from_supervisor,
+        list(writing_agents.keys())
+    )
+
+    # Add routing from top supervisor to team supervisors
+    workflow.add_conditional_edges(
+        "supervisor",
+        route_from_top_supervisor,
+        ["research_supervisor", "writing_supervisor"]
+    )
+
+    # Add routing from team supervisors back to top supervisor
+    workflow.add_conditional_edges(
+        "research_supervisor",
+        route_to_supervisor,
+        ["supervisor"]
+    )
+    workflow.add_conditional_edges(
+        "writing_supervisor",
+        route_to_supervisor,
+        ["supervisor"]
+    )
 
     # Set entry point
     workflow.set_entry_point("start")
