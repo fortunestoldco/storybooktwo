@@ -1,6 +1,6 @@
 """Define the creative writing agent graph structure.
 
-Current Date and Time (UTC): 2025-02-11 22:20:21
+Current Date and Time (UTC): 2025-02-11 22:23:25
 Current User's Login: fortunestoldco
 """
 
@@ -259,7 +259,8 @@ def create_graph(config: Optional[Configuration] = None) -> StateGraph:
     if config is None:
         config = Configuration()
 
-    workflow = StateGraph(State)
+    # Define the graph with input schema
+    workflow = StateGraph(State, input_schema=StoryInput)
     
     # Add input validator
     def validate_and_initialize(story_input: StoryInput) -> State:
@@ -346,9 +347,6 @@ def create_graph(config: Optional[Configuration] = None) -> StateGraph:
     
     # Set entry point
     workflow.set_entry_point("start")
-    
-    # Set input type
-    workflow.set_input_type(StoryInput)
     
     # Compile the graph
     final_graph = workflow.compile()
