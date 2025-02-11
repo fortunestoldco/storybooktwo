@@ -1,10 +1,10 @@
 """Define the creative writing agent graph structure.
 
-Current Date and Time (UTC): 2025-02-11 22:00:07
+Current Date and Time (UTC): 2025-02-11 22:04:15
 Current User's Login: fortunestoldco
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Callable
 import os
 from datetime import datetime
 from langchain_openai import ChatOpenAI
@@ -24,6 +24,54 @@ from src.team.prompts import (
     NOTE_TAKER_PROMPT,
 )
 from src.team.tools import RESEARCH_TOOLS, WRITING_TOOLS
+
+def create_team_graph(
+    supervisor_node: Callable,
+    team_nodes: Dict[str, Callable],
+    config: Configuration,
+    name: str
+) -> Graph:
+    """Create a team graph with a supervisor and team members.
+    
+    Args:
+        supervisor_node: The supervisor node function
+        team_nodes: Dictionary of team member node functions
+        config: Configuration instance
+        name: Name of the team graph
+        
+    Returns:
+        Compiled team graph
+    """
+    workflow = StateGraph(State)
+    
+    # Add nodes
+    workflow.add_node("supervisor", supervisor_node)
+    for node_name, node_fn in team_nodes.items():
+        workflow.add_node(node_name, node_fn)
+    
+    # Add end node
+    def end_node(state: State) -> Dict:
+        """End state node."""
+        return {"messages": state.get("messages", []), "next": "END"}
+    
+    workflow.add_node("end", end_node)
+    
+    # Add edges from supervisor to all team members
+    for node_name in team_nodes:
+        workflow.add_edge("supervisor", node_name)
+        workflow.add_edge(node_name, "supervisor")
+    
+    # Add conditional edges from supervisor
+    workflow.add_conditional_edges(
+        "supervisor",
+        lambda x: "end" if x["next"] == "FINISH" else x["next"],
+        {**{name: name for name in team_nodes.keys()}, "end": "end"}
+    )
+    
+    # Set entry point
+    workflow.set_entry_point("supervisor")
+    
+    return workflow.compile()
 
 def create_agent_node(
     llm: ChatOpenAI,
