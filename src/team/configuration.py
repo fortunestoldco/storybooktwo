@@ -1,20 +1,30 @@
-"""Configuration and state classes for the hierarchical team agent."""
+"""Configuration and state classes for the hierarchical team agent.
 
-from dataclasses import dataclass
-from typing import List
-from langchain_core.messages import BaseMessage
-from langgraph.graph import MessagesState
+Current Date and Time (UTC): 2025-02-11 21:01:56
+Current User's Login: fortunestoldco
+"""
+
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from langchain_core.messages import BaseMessage
 
 # Initialize working directory
 _TEMP_DIRECTORY = TemporaryDirectory()
 WORKING_DIRECTORY = Path(_TEMP_DIRECTORY.name)
 
-# Define state class
-class State(MessagesState):
-    """State class for the agent system."""
-    next: str
+@dataclass
+class State:
+    """Base state for team operations."""
+    messages: List[BaseMessage] = field(default_factory=list)
+    next: str = field(default="")
+    
+    def get(self, key: str, default: Optional[any] = None) -> any:
+        """Get a value from the state dict."""
+        if key == "messages":
+            return self.messages
+        return default
 
 @dataclass
 class Configuration:
