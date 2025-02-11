@@ -1,6 +1,6 @@
 """Define the creative writing agent graph structure.
 
-Current Date and Time (UTC - YYYY-MM-DD HH:MM:SS formatted): 2025-02-11 22:55:13
+Current Date and Time (UTC - YYYY-MM-DD HH:MM:SS formatted): 2025-02-11 23:16:54
 Current User's Login: fortunestoldco
 """
 
@@ -15,14 +15,14 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, System
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.agents import create_openai_functions_agent
 from langchain.agents.format_scratchpad import format_to_openai_functions
-from langgraph.graph import Graph
+from langgraph.graph import Graph, END
 from langgraph.prebuilt.tool_executor import ToolExecutor
 from pydantic import BaseModel, Field, validator
 
 from src.team.configuration import (
     State, Configuration, StoryParameters, 
     MarketResearch, MessageWrapper,
-    ChapterStatus
+    ChapterStatus, process_input, create_initial_state
 )
 from src.team.prompts import (
     RESEARCH_SYSTEM_PROMPT,
@@ -34,99 +34,10 @@ from src.team.prompts import (
 )
 from src.team.tools import RESEARCH_TOOLS, WRITING_TOOLS
 
-class StoryInput(BaseModel):
-    """Input parameters for the story creation process."""
-    starting_point: str = Field(
-        ...,
-        description="The initial situation or scene that starts the story"
-    )
-    plot_points: List[str] = Field(
-        ...,
-        description="Key plot points that must be included in the story"
-    )
-    intended_ending: str = Field(
-        ...,
-        description="The desired conclusion of the story"
-    )
-    num_chapters: int = Field(
-        default=10,
-        description="Number of chapters in the story"
-    )
-    words_per_chapter: int = Field(
-        default=2000,
-        description="Target words per chapter"
-    )
-
-    @validator('num_chapters')
-    def validate_num_chapters(cls, v):
-        """Validate number of chapters."""
-        if v < 1:
-            raise ValueError("Number of chapters must be at least 1")
-        if v > 50:
-            raise ValueError("Number of chapters cannot exceed 50")
-        return v
-
-    @validator('words_per_chapter')
-    def validate_words_per_chapter(cls, v):
-        """Validate words per chapter."""
-        if v < 500:
-            raise ValueError("Words per chapter must be at least 500")
-        if v > 10000:
-            raise ValueError("Words per chapter cannot exceed 10,000")
-        return v
-
-    def to_parameters(self) -> StoryParameters:
-        """Convert input to StoryParameters."""
-        return StoryParameters(
-            starting_point=self.starting_point,
-            plot_points=self.plot_points,
-            intended_ending=self.intended_ending,
-            num_chapters=self.num_chapters,
-            words_per_chapter=self.words_per_chapter
-        )
-
-def process_input(inputs: Dict) -> Dict:
-    """Process and validate the input dictionary."""
-    try:
-        # Convert dict to StoryInput for validation
-        story_input = StoryInput(**inputs)
-        return {
-            "starting_point": story_input.starting_point,
-            "plot_points": story_input.plot_points,
-            "intended_ending": story_input.intended_ending,
-            "num_chapters": story_input.num_chapters,
-            "words_per_chapter": story_input.words_per_chapter
-        }
-    except Exception as e:
-        raise ValueError(f"Invalid input parameters: {str(e)}") from e
-
 def validate_and_initialize(inputs: Dict) -> State:
     """Validate input and create initial state."""
-    # Process and validate inputs
-    processed_inputs = process_input(inputs)
-    
-    # Create StoryInput instance
-    story_input = StoryInput(**processed_inputs)
-    
-    # Convert to StoryParameters
-    story_parameters = story_input.to_parameters()
-    
-    initial_message = SystemMessage(
-        content=f"""Beginning story development with parameters:
-{story_parameters.to_prompt()}"""
-    )
-    
-    state = State(
-        messages=[MessageWrapper.from_message(initial_message)],
-        story_parameters=story_parameters,
-        market_research=MarketResearch(),
-        next=""
-    )
-    
-    state.initialize_chapters()
-    state.market_research.chapter_distribution = story_parameters.get_chapter_distribution()
-    
-    return state
+    validated_input = process_input(inputs)
+    return create_initial_state(validated_input)
 
 def create_agent_node(
     llm: ChatOpenAI,
@@ -178,6 +89,7 @@ def create_agent_node(
         message_history.add_ai_message(AIMessage(content=response))
         
         current_state.add_message(AIMessage(content=response))
+        current_state.current_supervisor = name  # Track current agent for routing
         return current_state.dict()
     
     return run_agent
@@ -248,6 +160,7 @@ Respond with next team member to act or 'FINISH' if complete."""),
         
         current_state.add_message(response)
         current_state.next = next_step
+        current_state.current_supervisor = name  # Track current supervisor
         return current_state.dict()
     
     return decide_next
@@ -307,91 +220,63 @@ def create_graph(config: Optional[Configuration] = None) -> Graph:
     workflow.add_node("writing_supervisor", writing_supervisor)
     workflow.add_node("supervisor", top_supervisor)
 
-    # Set up hierarchical routing
-    def route_to_supervisor(state: Dict) -> List[str]:
-        """Route agents back to their supervisors."""
+    def route_next(state: Dict) -> List[str]:
+        """Route to the next step based on state."""
         next_step = state.get("next", "")
         if next_step == "FINISH":
-            return []
+            return [END]
             
-        if next_step in research_agents:
+        # Get current supervisor/context
+        current_supervisor = state.get("current_supervisor", "supervisor")
+        
+        # Define valid transitions
+        if current_supervisor == "supervisor":
+            if next_step in ["research_supervisor", "writing_supervisor"]:
+                return [next_step]
+                
+        elif current_supervisor == "research_supervisor":
+            if next_step in research_agents:
+                return [next_step]
+            if next_step == "supervisor":
+                return [next_step]
+                
+        elif current_supervisor == "writing_supervisor":
+            if next_step in writing_agents:
+                return [next_step]
+            if next_step == "supervisor":
+                return [next_step]
+                
+        elif current_supervisor in research_agents:
             return ["research_supervisor"]
-        elif next_step in writing_agents:
+            
+        elif current_supervisor in writing_agents:
             return ["writing_supervisor"]
-        elif next_step in ["research_supervisor", "writing_supervisor"]:
-            return ["supervisor"]
-        return []
-
-    def route_from_supervisor(state: Dict) -> List[str]:
-        """Route from supervisors to their team members."""
-        next_step = state.get("next", "")
-        if next_step == "FINISH":
-            return []
             
-        if next_step in research_agents and state.get("current_supervisor") == "research_supervisor":
-            return [next_step]
-        elif next_step in writing_agents and state.get("current_supervisor") == "writing_supervisor":
-            return [next_step]
-        return []
-
-    def route_from_top_supervisor(state: Dict) -> List[str]:
-        """Route from top supervisor to team supervisors."""
-        next_step = state.get("next", "")
-        if next_step == "FINISH":
-            return []
-            
-        if next_step in ["research_supervisor", "writing_supervisor"]:
-            return [next_step]
         return []
 
     # Add initial edge
     workflow.add_edge("start", "supervisor")
 
-    # Add routing from agents to their supervisors
-    for agent in research_agents:
-        workflow.add_conditional_edges(
-            agent,
-            route_to_supervisor,
-            ["research_supervisor"]
-        )
-
-    for agent in writing_agents:
-        workflow.add_conditional_edges(
-            agent,
-            route_to_supervisor,
-            ["writing_supervisor"]
-        )
-
-    # Add routing from supervisors to their agents
-    workflow.add_conditional_edges(
-        "research_supervisor",
-        route_from_supervisor,
-        list(research_agents.keys())
-    )
-    workflow.add_conditional_edges(
-        "writing_supervisor",
-        route_from_supervisor,
-        list(writing_agents.keys())
-    )
-
-    # Add routing from top supervisor to team supervisors
-    workflow.add_conditional_edges(
+    # Add conditional routing for all nodes
+    for node in [
         "supervisor",
-        route_from_top_supervisor,
-        ["research_supervisor", "writing_supervisor"]
-    )
-
-    # Add routing from team supervisors back to top supervisor
-    workflow.add_conditional_edges(
         "research_supervisor",
-        route_to_supervisor,
-        ["supervisor"]
-    )
-    workflow.add_conditional_edges(
         "writing_supervisor",
-        route_to_supervisor,
-        ["supervisor"]
-    )
+        *research_agents.keys(),
+        *writing_agents.keys()
+    ]:
+        workflow.add_conditional_edges(
+            node,
+            route_next,
+            [
+                "supervisor",
+                "research_supervisor",
+                "writing_supervisor",
+                *research_agents.keys(),
+                *writing_agents.keys(),
+                END
+            ]
+        )
 
     # Set entry point
     workflow.set_entry_point("start")
