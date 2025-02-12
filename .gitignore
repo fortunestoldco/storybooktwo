@@ -8,6 +8,8 @@ uv.lock
 *.so
 .env.local
 .env
+.env.yaml
+
 # Distribution / packaging
 .Python
 build/

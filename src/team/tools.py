@@ -1,94 +1,122 @@
-"""Tool definitions for the hierarchical team agent."""
+"""Tools for the hierarchical team agent.
 
-from typing import Annotated, Dict, List, Optional
-from langchain_core.tools import tool
-from langchain_community.tools.tavily_search import TavilySearchResults
-from langchain_community.document_loaders import WebBaseLoader
-from langchain_experimental.utilities import PythonREPL
-from .configuration import WORKING_DIRECTORY
+Current Date and Time (UTC): 2025-02-12 01:39:53
+Current User's Login: fortunestoldco
+"""
 
-# Initialize tools
-tavily_tool = TavilySearchResults(max_results=5)
+import os
+import json
+from typing import Dict, List, Optional
+from datetime import datetime
+from pathlib import Path
+from langchain_community.tools import BaseTool
+from langchain_community.utilities.tavily_search import TavilySearchAPIWrapper
+from bs4 import BeautifulSoup
+import requests
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-@tool
-def scrape_webpages(urls: List[str]) -> str:
-    """Use requests and bs4 to scrape the provided web pages for detailed information."""
-    loader = WebBaseLoader(urls)
-    docs = loader.load()
-    return "\n\n".join(
-        [
-            f'<Document name="{doc.metadata.get("title", "")}">\n{doc.page_content}\n</Document>'
-            for doc in docs
-        ]
-    )
+class FileSystemTool(BaseTool):
+    """Base class for file system tools."""
+    working_dir: Path
+    
+    def __init__(self, working_dir: Path):
+        super().__init__()
+        self.working_dir = working_dir
+        self.working_dir.mkdir(parents=True, exist_ok=True)
 
-@tool
-def create_outline(
-    points: Annotated[List[str], "List of main points or sections."],
-    file_name: Annotated[str, "File path to save the outline."],
-) -> Annotated[str, "Path of the saved outline file."]:
-    """Create and save an outline."""
-    with (WORKING_DIRECTORY / file_name).open("w") as file:
-        for i, point in enumerate(points):
-            file.write(f"{i + 1}. {point}\n")
-    return f"Outline saved to {file_name}"
+class DocumentReader(FileSystemTool):
+    """Tool for reading documents."""
+    name = "read_document"
+    description = "Read the contents of a document file"
+    
+    def _run(self, filename: str) -> str:
+        filepath = self.working_dir / filename
+        if not filepath.exists():
+            return f"Error: File {filename} does not exist"
+        return filepath.read_text()
 
-@tool
-def read_document(
-    file_name: Annotated[str, "File path to read the document from."],
-    start: Annotated[Optional[int], "The start line. Default is 0"] = None,
-    end: Annotated[Optional[int], "The end line. Default is None"] = None,
-) -> str:
-    """Read the specified document."""
-    with (WORKING_DIRECTORY / file_name).open("r") as file:
-        lines = file.readlines()
-    if start is None:
-        start = 0
-    return "\n".join(lines[start:end])
+class DocumentWriter(FileSystemTool):
+    """Tool for writing documents."""
+    name = "write_document"
+    description = "Write content to a document file"
+    
+    def _run(self, filename: str, content: str) -> str:
+        filepath = self.working_dir / filename
+        filepath.write_text(content)
+        return f"Successfully wrote to {filename}"
 
-@tool
-def write_document(
-    content: Annotated[str, "Text content to be written into the document."],
-    file_name: Annotated[str, "File path to save the document."],
-) -> Annotated[str, "Path of the saved document file."]:
-    """Create and save a text document."""
-    with (WORKING_DIRECTORY / file_name).open("w") as file:
-        file.write(content)
-    return f"Document saved to {file_name}"
+class DocumentEditor(FileSystemTool):
+    """Tool for editing documents."""
+    name = "edit_document"
+    description = "Edit an existing document file"
+    
+    def _run(self, filename: str, content: str) -> str:
+        filepath = self.working_dir / filename
+        if not filepath.exists():
+            return f"Error: File {filename} does not exist"
+        filepath.write_text(content)
+        return f"Successfully updated {filename}"
 
-@tool
-def edit_document(
-    file_name: Annotated[str, "Path of the document to be edited."],
-    inserts: Annotated[
-        Dict[int, str],
-        "Dictionary where key is the line number (1-indexed) and value is the text to be inserted at that line.",
-    ],
-) -> Annotated[str, "Path of the edited document file."]:
-    """Edit a document by inserting text at specific line numbers."""
-    with (WORKING_DIRECTORY / file_name).open("r") as file:
-        lines = file.readlines()
+class OutlineCreator(FileSystemTool):
+    """Tool for creating document outlines."""
+    name = "create_outline"
+    description = "Create a document outline and save it"
+    
+    def _run(self, filename: str, sections: List[str]) -> str:
+        filepath = self.working_dir / filename
+        content = "\n".join(f"# {section}" for section in sections)
+        filepath.write_text(content)
+        return f"Successfully created outline in {filename}"
 
-    sorted_inserts = sorted(inserts.items())
-    for line_number, text in sorted_inserts:
-        if 1 <= line_number <= len(lines) + 1:
-            lines.insert(line_number - 1, text + "\n")
-        else:
-            return f"Error: Line number {line_number} is out of range."
+class WebScraper(BaseTool):
+    """Tool for web scraping."""
+    name = "scrape_webpages"
+    description = "Scrape content from web pages"
+    
+    def _run(self, urls: List[str]) -> Dict[str, str]:
+        results = {}
+        for url in urls:
+            try:
+                response = requests.get(url)
+                soup = BeautifulSoup(response.text, 'html.parser')
+                results[url] = soup.get_text()
+            except Exception as e:
+                results[url] = f"Error: {str(e)}"
+        return results
 
-    with (WORKING_DIRECTORY / file_name).open("w") as file:
-        file.writelines(lines)
-    return f"Document edited and saved to {file_name}"
+class ChartGenerator(FileSystemTool):
+    """Tool for generating charts using Python."""
+    name = "python_repl_tool"
+    description = "Generate charts and save them as images"
+    
+    def _run(self, code: str) -> str:
+        try:
+            # Create a new figure for each chart
+            plt.figure()
+            
+            # Execute the plotting code
+            exec(code, {'plt': plt, 'sns': sns})
+            
+            # Save the figure
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"chart_{timestamp}.png"
+            filepath = self.working_dir / filename
+            plt.savefig(filepath)
+            plt.close()
+            
+            return f"Successfully created chart: {filename}"
+        except Exception as e:
+            return f"Error generating chart: {str(e)}"
 
-# Create Python REPL tool
-repl = PythonREPL()
-
-@tool
-def python_repl_tool(
-    code: Annotated[str, "The python code to execute to generate your chart."],
-):
-    """Use this to execute python code."""
-    try:
-        result = repl.run(code)
-    except BaseException as e:
-        return f"Failed to execute. Error: {repr(e)}"
-    return f"Successfully executed:\n```python\n{code}\n```\nStdout: {result}"
+def create_tools(config):
+    """Create tool instances with configuration."""
+    return {
+        "read_document": DocumentReader(config.working_directory),
+        "write_document": DocumentWriter(config.working_directory),
+        "edit_document": DocumentEditor(config.working_directory),
+        "create_outline": OutlineCreator(config.working_directory),
+        "scrape_webpages": WebScraper(),
+        "python_repl_tool": ChartGenerator(config.working_directory),
+        "tavily_tool": TavilySearchAPIWrapper(tavily_api_key=config.tavily_api_key)
+    }
