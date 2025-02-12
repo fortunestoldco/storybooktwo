@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Sequence, Optional, List, Dict
+from typing import Sequence, Optional, List, Dict, Any
 from langchain_core.messages import AnyMessage
 from langgraph.graph import add_messages
 from langgraph.managed import IsLastStep
@@ -17,6 +17,8 @@ class InputState:
     messages: Annotated[Sequence[AnyMessage], add_messages] = field(
         default_factory=list
     )
+    run_metadata: Dict[str, Any] = field(default_factory=dict)
+    input_parameters: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
