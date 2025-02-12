@@ -1,11 +1,11 @@
-"""Configuration and state classes for the hierarchical team agent.
+"""Configuration for the creative writing system.
 
-Current Date and Time (UTC): 2025-02-11 23:55:35
+Current Date and Time (UTC): 2025-02-12 00:25:28
 Current User's Login: fortunestoldco
 """
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Optional, Any
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -14,20 +14,19 @@ from langchain_mongodb.chat_message_histories import MongoDBChatMessageHistory
 from langsmith import Client
 from dotenv import load_dotenv
 
-# Load environment variables from project root
+# Load environment variables
 load_dotenv(Path(__file__).parent.parent / '.env')
 
-# Set default user agent for langchain
+# Set default user agent
 os.environ["USER_AGENT"] = "storybooktwo/0.1.0"
 
-# Required environment variables
 required_env_vars = [
     "MONGODB_CONNECTION_STRING",
     "MONGODB_DATABASE_NAME",
     "OPENAI_API_KEY",
     "TAVILY_API_KEY",
-    "LANGSMITH_API_KEY",  # Updated from LANGCHAIN_API_KEY
-    "LANGSMITH_PROJECT",  # Updated from LANGCHAIN_PROJECT
+    "LANGSMITH_API_KEY",
+    "LANGSMITH_PROJECT",
 ]
 
 # Check for required environment variables
@@ -40,12 +39,37 @@ _TEMP_DIRECTORY = TemporaryDirectory()
 WORKING_DIRECTORY = Path(_TEMP_DIRECTORY.name)
 
 @dataclass
+class StoryParameters:
+    """Parameters for story generation."""
+    start: str
+    plot_points: List[str]
+    ending: str
+    genre: Optional[str] = None
+    target_length: Optional[int] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return asdict(self)
+
+@dataclass
 class State:
-    """Base state for team operations."""
+    """Base state for story creation operations."""
     messages: List[BaseMessage] = field(default_factory=list)
     next: str = field(default="")
     session_id: str = field(default="default")
     input_parameters: Dict[str, Any] = field(default_factory=dict)
+    story_parameters: Dict[str, Any] = field(default_factory=lambda: {
+        "start": "",
+        "plot_points": [],
+        "ending": "",
+        "genre": None,
+        "target_length": None
+    })
+    research_data: Dict[str, Any] = field(default_factory=lambda: {
+        "market_analysis": {},
+        "audience_data": {},
+        "improvement_opportunities": []
+    })
     metadata: Dict = field(default_factory=lambda: {
         "app_name": "storybooktwo",
         "version": "0.1.0",
@@ -54,27 +78,21 @@ class State:
     
     def get(self, key: str, default: Optional[any] = None) -> any:
         """Get a value from the state dict."""
-        if key == "messages":
-            return self.messages
-        if key == "session_id":
-            return self.session_id
-        if key == "metadata":
-            return self.metadata
-        if key == "input_parameters":
-            return self.input_parameters
+        if hasattr(self, key):
+            return getattr(self, key)
         return default
 
 @dataclass
 class Configuration:
-    """Configuration for the agent system."""
+    """Configuration for the creative writing system."""
     model: str = os.getenv("OPENAI_MODEL_NAME", "gpt-4")
     max_search_results: int = int(os.getenv("MAX_SEARCH_RESULTS", "5"))
     working_directory: Path = WORKING_DIRECTORY
     mongodb_connection: str = os.getenv("MONGODB_CONNECTION_STRING")
     mongodb_db_name: str = os.getenv("MONGODB_DATABASE_NAME")
-    mongodb_collection: str = os.getenv("MONGODB_COLLECTION_NAME", "chat_histories")
+    mongodb_collection: str = os.getenv("MONGODB_COLLECTION_NAME", "story_histories")
     api_base_url: str = os.getenv("API_BASE_URL", "http://127.0.0.1:2024")
-    langsmith_project: str = os.getenv("LANGSMITH_PROJECT", "storybooktwo")  # Updated from LANGCHAIN_PROJECT
+    langsmith_project: str = os.getenv("LANGSMITH_PROJECT", "storybooktwo")
     
     def __post_init__(self):
         """Initialize LangSmith client."""
@@ -104,5 +122,6 @@ class Configuration:
         return {
             "session_id": state.session_id,
             "input_parameters": state.input_parameters,
+            "story_parameters": state.story_parameters,
             **self.get_metadata()
         }

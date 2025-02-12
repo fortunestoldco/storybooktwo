@@ -1,94 +1,64 @@
-"""Tool definitions for the hierarchical team agent."""
+"""Tools for the creative writing system.
 
-from typing import Annotated, Dict, List, Optional
-from langchain_core.tools import tool
-from langchain_community.tools.tavily_search import TavilySearchResults
-from langchain_community.document_loaders import WebBaseLoader
-from langchain_experimental.utilities import PythonREPL
-from .configuration import WORKING_DIRECTORY
+Current Date and Time (UTC): 2025-02-12 00:19:07
+Current User's Login: fortunestoldco
+"""
 
-# Initialize tools
-tavily_tool = TavilySearchResults(max_results=5)
+from langchain_community.utilities.tavily_search import TavilySearchAPIWrapper
+from typing import Dict, Any, List
+import requests
+from bs4 import BeautifulSoup
+from pathlib import Path
+import json
 
-@tool
-def scrape_webpages(urls: List[str]) -> str:
-    """Use requests and bs4 to scrape the provided web pages for detailed information."""
-    loader = WebBaseLoader(urls)
-    docs = loader.load()
-    return "\n\n".join(
-        [
-            f'<Document name="{doc.metadata.get("title", "")}">\n{doc.page_content}\n</Document>'
-            for doc in docs
-        ]
-    )
+def tavily_tool(query: str) -> str:
+    """Search the web using Tavily API."""
+    search = TavilySearchAPIWrapper()
+    results = search.run(query)
+    return json.dumps(results, indent=2)
 
-@tool
-def create_outline(
-    points: Annotated[List[str], "List of main points or sections."],
-    file_name: Annotated[str, "File path to save the outline."],
-) -> Annotated[str, "Path of the saved outline file."]:
-    """Create and save an outline."""
-    with (WORKING_DIRECTORY / file_name).open("w") as file:
-        for i, point in enumerate(points):
-            file.write(f"{i + 1}. {point}\n")
-    return f"Outline saved to {file_name}"
+def scrape_webpages(urls: list) -> Dict[str, Any]:
+    """Scrape content from provided URLs."""
+    results = {}
+    for url in urls:
+        try:
+            response = requests.get(
+                url,
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            )
+            soup = BeautifulSoup(response.text, 'html.parser')
+            results[url] = {
+                'title': soup.title.string if soup.title else '',
+                'content': soup.get_text()[:5000]  # First 5000 chars
+            }
+        except Exception as e:
+            results[url] = {'error': str(e)}
+    return results
 
-@tool
-def read_document(
-    file_name: Annotated[str, "File path to read the document from."],
-    start: Annotated[Optional[int], "The start line. Default is 0"] = None,
-    end: Annotated[Optional[int], "The end line. Default is None"] = None,
-) -> str:
-    """Read the specified document."""
-    with (WORKING_DIRECTORY / file_name).open("r") as file:
-        lines = file.readlines()
-    if start is None:
-        start = 0
-    return "\n".join(lines[start:end])
+def write_document(content: str, filename: str) -> str:
+    """Write content to a document."""
+    filepath = Path(filename)
+    filepath.write_text(content)
+    return f"Written to {filepath}"
 
-@tool
-def write_document(
-    content: Annotated[str, "Text content to be written into the document."],
-    file_name: Annotated[str, "File path to save the document."],
-) -> Annotated[str, "Path of the saved document file."]:
-    """Create and save a text document."""
-    with (WORKING_DIRECTORY / file_name).open("w") as file:
-        file.write(content)
-    return f"Document saved to {file_name}"
+def read_document(filename: str) -> str:
+    """Read content from a document."""
+    filepath = Path(filename)
+    if filepath.exists():
+        return filepath.read_text()
+    return f"File {filename} not found"
 
-@tool
-def edit_document(
-    file_name: Annotated[str, "Path of the document to be edited."],
-    inserts: Annotated[
-        Dict[int, str],
-        "Dictionary where key is the line number (1-indexed) and value is the text to be inserted at that line.",
-    ],
-) -> Annotated[str, "Path of the edited document file."]:
-    """Edit a document by inserting text at specific line numbers."""
-    with (WORKING_DIRECTORY / file_name).open("r") as file:
-        lines = file.readlines()
+def edit_document(filename: str, content: str) -> str:
+    """Edit an existing document."""
+    filepath = Path(filename)
+    if filepath.exists():
+        filepath.write_text(content)
+        return f"Updated {filepath}"
+    return f"File {filename} not found"
 
-    sorted_inserts = sorted(inserts.items())
-    for line_number, text in sorted_inserts:
-        if 1 <= line_number <= len(lines) + 1:
-            lines.insert(line_number - 1, text + "\n")
-        else:
-            return f"Error: Line number {line_number} is out of range."
-
-    with (WORKING_DIRECTORY / file_name).open("w") as file:
-        file.writelines(lines)
-    return f"Document edited and saved to {file_name}"
-
-# Create Python REPL tool
-repl = PythonREPL()
-
-@tool
-def python_repl_tool(
-    code: Annotated[str, "The python code to execute to generate your chart."],
-):
-    """Use this to execute python code."""
-    try:
-        result = repl.run(code)
-    except BaseException as e:
-        return f"Failed to execute. Error: {repr(e)}"
-    return f"Successfully executed:\n```python\n{code}\n```\nStdout: {result}"
+def create_outline(title: str, points: List[str]) -> str:
+    """Create a story outline."""
+    outline = f"# {title}\n\n"
+    for i, point in enumerate(points, 1):
+        outline += f"{i}. {point}\n"
+    return outline
