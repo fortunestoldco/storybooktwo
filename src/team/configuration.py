@@ -1,39 +1,36 @@
-"""Configuration and state classes for the creative writing agent.
+"""Configuration and state classes for the hierarchical team agent.
 
-Current Date and Time (UTC): 2025-02-11 21:58:52
+Current Date and Time (UTC): 2025-02-11 21:13:25
 Current User's Login: fortunestoldco
 """
 
+import os
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from langchain_core.messages import BaseMessage
 from langchain_mongodb.chat_message_histories import MongoDBChatMessageHistory
 
-@dataclass
-class StoryParameters:
-    """Parameters for story generation."""
-    starting_point: str
-    plot_points: List[str]
-    intended_ending: str
-    
-    def to_prompt(self) -> str:
-        """Convert parameters to a prompt string."""
-        plot_points_str = "\n".join(f"- {point}" for point in self.plot_points)
-        return f"""Story Parameters:
-Starting Point: {self.starting_point}
+# Set default user agent for langchain
+os.environ["USER_AGENT"] = "storybooktwo/0.1.0"
 
-Required Plot Points:
-{plot_points_str}
+# Required environment variables
+required_env_vars = [
+    "MONGODB_CONNECTION_STRING",
+    "MONGODB_DATABASE_NAME",
+    "OPENAI_API_KEY",
+    "TAVILY_API_KEY"
+]
 
-Intended Ending: {self.intended_ending}"""
+# Check for required environment variables
+missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+if missing_vars:
+    raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
 
-@dataclass
-class MarketResearch:
-    """Container for market research data."""
-    similar_books: List[Dict[str, str]] = field(default_factory=list)
-    target_demographic: Dict[str, any] = field(default_factory=dict)
-    market_analysis: Dict[str, any] = field(default_factory=dict)
-    improvement_opportunities: List[str] = field(default_factory=list)
+# Initialize working directory
+_TEMP_DIRECTORY = TemporaryDirectory()
+WORKING_DIRECTORY = Path(_TEMP_DIRECTORY.name)
 
 @dataclass
 class State:
@@ -41,8 +38,11 @@ class State:
     messages: List[BaseMessage] = field(default_factory=list)
     next: str = field(default="")
     session_id: str = field(default="default")
-    story_parameters: Optional[StoryParameters] = None
-    market_research: MarketResearch = field(default_factory=MarketResearch)
+    metadata: Dict = field(default_factory=lambda: {
+        "app_name": "storybooktwo",
+        "version": "0.1.0",
+        "api_base_url": "http://127.0.0.1:2024"
+    })
     
     def get(self, key: str, default: Optional[any] = None) -> any:
         """Get a value from the state dict."""
@@ -50,19 +50,20 @@ class State:
             return self.messages
         if key == "session_id":
             return self.session_id
-        if key == "story_parameters":
-            return self.story_parameters
-        if key == "market_research":
-            return self.market_research
+        if key == "metadata":
+            return self.metadata
         return default
 
 @dataclass
 class Configuration:
     """Configuration for the agent system."""
-    model: str = "gpt-4"
-    mongodb_connection: str = ""
-    mongodb_db_name: str = "creative_writing"
-    mongodb_collection: str = "story_development"
+    model: str = os.getenv("OPENAI_MODEL_NAME", "gpt-4")
+    max_search_results: int = int(os.getenv("MAX_SEARCH_RESULTS", "5"))
+    working_directory: Path = WORKING_DIRECTORY
+    mongodb_connection: str = os.getenv("MONGODB_CONNECTION_STRING")
+    mongodb_db_name: str = os.getenv("MONGODB_DATABASE_NAME")
+    mongodb_collection: str = os.getenv("MONGODB_COLLECTION_NAME", "chat_histories")
+    api_base_url: str = os.getenv("API_BASE_URL", "http://127.0.0.1:2024")
     
     def get_message_history(self, session_id: str) -> MongoDBChatMessageHistory:
         """Get MongoDB message history for a session."""
@@ -72,3 +73,12 @@ class Configuration:
             database_name=self.mongodb_db_name,
             collection_name=self.mongodb_collection
         )
+
+    def get_metadata(self) -> Dict:
+        """Get metadata for langgraph."""
+        return {
+            "app_name": "storybooktwo",
+            "version": "0.1.0",
+            "api_base_url": self.api_base_url,
+            "model": self.model,
+        }

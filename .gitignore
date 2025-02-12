@@ -6,7 +6,8 @@ uv.lock
 
 # C extensions
 *.so
-
+.env.local
+.env
 # Distribution / packaging
 .Python
 build/

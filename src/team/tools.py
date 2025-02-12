@@ -1,179 +1,94 @@
-"""Tools for the creative writing agent.
+"""Tool definitions for the hierarchical team agent."""
 
-Current Date and Time (UTC): 2025-02-11 22:02:39
-Current User's Login: fortunestoldco
-"""
+from typing import Annotated, Dict, List, Optional
+from langchain_core.tools import tool
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_community.document_loaders import WebBaseLoader
+from langchain_experimental.utilities import PythonREPL
+from .configuration import WORKING_DIRECTORY
 
-from typing import List, Dict, Optional
-import json
-import requests
-from bs4 import BeautifulSoup
-from langchain.tools import Tool
-from pydantic import BaseModel, Field, ConfigDict
+# Initialize tools
+tavily_tool = TavilySearchResults(max_results=5)
 
-class BookSearchResult(BaseModel):
-    """Structure for book search results."""
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    
-    title: str = Field(..., description="Book title")
-    author: str = Field(..., description="Book author")
-    rating: float = Field(..., description="Average rating")
-    reviews_count: int = Field(..., description="Number of reviews")
-    genre: str = Field(..., description="Book genre")
-    popularity_score: float = Field(..., description="Calculated popularity score")
-    url: str = Field(..., description="URL to book details")
-    platform: str = Field(..., description="Platform (Amazon, Waterstones, etc.)")
-
-class DemographicInfo(BaseModel):
-    """Structure for demographic information."""
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    
-    age_range: str = Field(..., description="Target age range")
-    gender_split: Dict[str, float] = Field(..., description="Gender distribution")
-    interests: List[str] = Field(..., description="Common interests")
-    reading_level: str = Field(..., description="Reading level")
-    preferred_genres: List[str] = Field(..., description="Preferred genres")
-
-class ReviewAnalysis(BaseModel):
-    """Structure for review analysis."""
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    
-    positive_points: List[str] = Field(..., description="Common positive feedback")
-    negative_points: List[str] = Field(..., description="Common criticisms")
-    demographic_info: DemographicInfo = Field(..., description="Reader demographic information")
-    rating_distribution: Dict[str, float] = Field(..., description="Distribution of ratings")
-    review_quotes: List[str] = Field(..., description="Notable review quotes")
-
-class MarketTrends(BaseModel):
-    """Structure for market trends."""
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    
-    trending_themes: List[str] = Field(..., description="Currently trending themes")
-    sales_data: Dict[str, float] = Field(..., description="Sales metrics")
-    growth_rate: float = Field(..., description="Market growth rate")
-    competition_level: str = Field(..., description="Market competition level")
-    opportunities: List[str] = Field(..., description="Market opportunities")
-
-def search_bestsellers(query: str) -> List[BookSearchResult]:
-    """Search bestseller lists across multiple platforms."""
-    # Implementation would include:
-    # - NYT Bestsellers API
-    # - Amazon Bestsellers
-    # - Waterstones Top Sellers
-    # - Goodreads Popular Books
-    return []
-
-def analyze_book_reviews(book_url: str) -> ReviewAnalysis:
-    """Analyze reviews for a specific book."""
-    # Placeholder implementation
-    return ReviewAnalysis(
-        positive_points=[],
-        negative_points=[],
-        demographic_info=DemographicInfo(
-            age_range="",
-            gender_split={},
-            interests=[],
-            reading_level="",
-            preferred_genres=[]
-        ),
-        rating_distribution={},
-        review_quotes=[]
+@tool
+def scrape_webpages(urls: List[str]) -> str:
+    """Use requests and bs4 to scrape the provided web pages for detailed information."""
+    loader = WebBaseLoader(urls)
+    docs = loader.load()
+    return "\n\n".join(
+        [
+            f'<Document name="{doc.metadata.get("title", "")}">\n{doc.page_content}\n</Document>'
+            for doc in docs
+        ]
     )
 
-def search_editorial_reviews(title: str) -> List[Dict[str, str]]:
-    """Search for professional editorial reviews."""
-    # Implementation would include:
-    # - Literary review sites
-    # - Book critic blogs
-    # - Professional review aggregators
-    return []
+@tool
+def create_outline(
+    points: Annotated[List[str], "List of main points or sections."],
+    file_name: Annotated[str, "File path to save the outline."],
+) -> Annotated[str, "Path of the saved outline file."]:
+    """Create and save an outline."""
+    with (WORKING_DIRECTORY / file_name).open("w") as file:
+        for i, point in enumerate(points):
+            file.write(f"{i + 1}. {point}\n")
+    return f"Outline saved to {file_name}"
 
-def analyze_market_trends(genre: str) -> MarketTrends:
-    """Analyze current market trends in a genre."""
-    # Placeholder implementation
-    return MarketTrends(
-        trending_themes=[],
-        sales_data={},
-        growth_rate=0.0,
-        competition_level="",
-        opportunities=[]
-    )
+@tool
+def read_document(
+    file_name: Annotated[str, "File path to read the document from."],
+    start: Annotated[Optional[int], "The start line. Default is 0"] = None,
+    end: Annotated[Optional[int], "The end line. Default is None"] = None,
+) -> str:
+    """Read the specified document."""
+    with (WORKING_DIRECTORY / file_name).open("r") as file:
+        lines = file.readlines()
+    if start is None:
+        start = 0
+    return "\n".join(lines[start:end])
 
-# Tool definitions
-bestseller_research_tool = Tool(
-    name="bestseller_research",
-    func=search_bestsellers,
-    description="Search bestseller lists across multiple platforms to find popular books in a given genre or theme"
-)
+@tool
+def write_document(
+    content: Annotated[str, "Text content to be written into the document."],
+    file_name: Annotated[str, "File path to save the document."],
+) -> Annotated[str, "Path of the saved document file."]:
+    """Create and save a text document."""
+    with (WORKING_DIRECTORY / file_name).open("w") as file:
+        file.write(content)
+    return f"Document saved to {file_name}"
 
-review_analysis_tool = Tool(
-    name="review_analysis",
-    func=analyze_book_reviews,
-    description="Analyze reader reviews and ratings for a specific book to understand reception and demographic appeal"
-)
+@tool
+def edit_document(
+    file_name: Annotated[str, "Path of the document to be edited."],
+    inserts: Annotated[
+        Dict[int, str],
+        "Dictionary where key is the line number (1-indexed) and value is the text to be inserted at that line.",
+    ],
+) -> Annotated[str, "Path of the edited document file."]:
+    """Edit a document by inserting text at specific line numbers."""
+    with (WORKING_DIRECTORY / file_name).open("r") as file:
+        lines = file.readlines()
 
-editorial_review_tool = Tool(
-    name="editorial_review",
-    func=search_editorial_reviews,
-    description="Search for professional editorial reviews and critic opinions on books"
-)
+    sorted_inserts = sorted(inserts.items())
+    for line_number, text in sorted_inserts:
+        if 1 <= line_number <= len(lines) + 1:
+            lines.insert(line_number - 1, text + "\n")
+        else:
+            return f"Error: Line number {line_number} is out of range."
 
-market_trends_tool = Tool(
-    name="market_trends",
-    func=analyze_market_trends,
-    description="Analyze current market trends, sales data, and popularity metrics for book genres"
-)
+    with (WORKING_DIRECTORY / file_name).open("w") as file:
+        file.writelines(lines)
+    return f"Document edited and saved to {file_name}"
 
-# Document handling tools
-def read_document(filename: str) -> str:
-    """Read content from a document."""
-    with open(filename, 'r') as f:
-        return f.read()
+# Create Python REPL tool
+repl = PythonREPL()
 
-def write_document(filename: str, content: str) -> str:
-    """Write content to a document."""
-    with open(filename, 'w') as f:
-        f.write(content)
-    return f"Written {len(content)} characters to {filename}"
-
-def edit_document(filename: str, edits: List[Dict[str, str]]) -> str:
-    """Apply edits to a document."""
-    content = read_document(filename)
-    for edit in edits:
-        # Apply each edit operation
-        pass
-    write_document(filename, content)
-    return f"Applied {len(edits)} edits to {filename}"
-
-# Tool instances
-document_reader = Tool(
-    name="read_document",
-    func=read_document,
-    description="Read content from a document file"
-)
-
-document_writer = Tool(
-    name="write_document",
-    func=write_document,
-    description="Write content to a document file"
-)
-
-document_editor = Tool(
-    name="edit_document",
-    func=edit_document,
-    description="Apply edits to an existing document"
-)
-
-# Group tools by team
-RESEARCH_TOOLS = [
-    bestseller_research_tool,
-    review_analysis_tool,
-    editorial_review_tool,
-    market_trends_tool
-]
-
-WRITING_TOOLS = [
-    document_reader,
-    document_writer,
-    document_editor
-]
+@tool
+def python_repl_tool(
+    code: Annotated[str, "The python code to execute to generate your chart."],
+):
+    """Use this to execute python code."""
+    try:
+        result = repl.run(code)
+    except BaseException as e:
+        return f"Failed to execute. Error: {repr(e)}"
+    return f"Successfully executed:\n```python\n{code}\n```\nStdout: {result}"
