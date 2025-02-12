@@ -1,15 +1,15 @@
 """Graph definition for the creative writing agent system.
 
-Current Date and Time (UTC): 2025-02-12 00:25:28
+Current Date and Time (UTC): 2025-02-12 00:34:16
 Current User's Login: fortunestoldco
 """
 
 import os
 import json
-from typing import Dict, Optional
+from typing import Dict, Optional, Any, Callable
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph
-from team.configuration import Configuration, State
+from team.configuration import Configuration, State, StoryState, StoryDict
 from team.state import TeamState
 from team.prompts import (
     MARKET_RESEARCH_PROMPT,
@@ -26,9 +26,15 @@ from team.tools import (
     create_outline
 )
 
-def create_agent_node(llm, tools, system_prompt, name, config: Configuration):
+def create_agent_node(
+    llm: ChatOpenAI,
+    tools: list,
+    system_prompt: str,
+    name: str,
+    config: Configuration
+) -> Callable[[State], StoryState]:
     """Create an agent node with proper LangSmith instrumentation."""
-    def agent_node(state: State) -> Dict:
+    def agent_node(state: State) -> StoryState:
         run_metadata = config.create_run_metadata(state)
         
         with config.langsmith_client.tracing(
@@ -53,31 +59,23 @@ def create_agent_node(llm, tools, system_prompt, name, config: Configuration):
                 *messages
             ])
             
-            return {
+            return state.to_dict() | {
                 "messages": [{"role": "assistant", "content": result.content}],
-                "next": "supervisor",
-                "session_id": state.session_id,
-                "input_parameters": state.input_parameters,
-                "story_parameters": story_params,
-                "research_data": state.get("research_data", {})
+                "next": "supervisor"
             }
             
     return agent_node
 
-def create_supervisor_node(llm, team_members, config: Configuration, name: str):
+def create_supervisor_node(
+    llm: ChatOpenAI,
+    team_members: list,
+    config: Configuration,
+    name: str
+) -> Callable[[State], StoryState]:
     """Create a supervisor node that manages the story creation workflow."""
-    def supervisor_node(state: State) -> Dict:
+    def supervisor_node(state: State) -> StoryState:
+        state.ensure_story_parameters()
         run_metadata = config.create_run_metadata(state)
-        
-        # Initialize story parameters if not present
-        if not state.story_parameters and state.input_parameters.get("initial_request"):
-            state.story_parameters = {
-                "start": state.input_parameters["initial_request"].get("start", ""),
-                "plot_points": state.input_parameters["initial_request"].get("plot_points", []),
-                "ending": state.input_parameters["initial_request"].get("ending", ""),
-                "genre": state.input_parameters["initial_request"].get("genre", None),
-                "target_length": state.input_parameters["initial_request"].get("target_length", None)
-            }
         
         with config.langsmith_client.tracing(
             project_name=config.langsmith_project,
@@ -119,18 +117,19 @@ Decide next action or FINISH if the story is complete."""
             if next_step == "writer" and current_phase != "writing":
                 state.input_parameters["current_phase"] = "writing"
             
-            return {
+            return state.to_dict() | {
                 "messages": [{"role": "assistant", "content": result.content}],
-                "next": next_step,
-                "session_id": state.session_id,
-                "input_parameters": state.input_parameters,
-                "story_parameters": story_params,
-                "research_data": research_data
+                "next": next_step
             }
             
     return supervisor_node
 
-def create_team_graph(supervisor, agents, config: Configuration, name: str) -> StateGraph:
+def create_team_graph(
+    supervisor: Callable,
+    agents: Dict[str, Callable],
+    config: Configuration,
+    name: str
+) -> StateGraph:
     """Create a team graph with proper LangSmith instrumentation."""
     workflow = StateGraph(TeamState)
     
@@ -140,15 +139,10 @@ def create_team_graph(supervisor, agents, config: Configuration, name: str) -> S
         workflow.add_node(agent_name, agent)
     
     # Add end state node
-    def end_node(state: TeamState) -> Dict:
+    def end_node(state: TeamState) -> StoryState:
         """End state for team graph."""
-        return {
-            "messages": state.messages,
-            "next": "FINISH",
-            "input_parameters": state.input_parameters,
-            "story_parameters": state.story_parameters,
-            "research_data": state.research_data
-        }
+        return state.to_dict() | {"next": "FINISH"}
+    
     workflow.add_node("end", end_node)
     
     # Add edges between nodes
@@ -202,7 +196,12 @@ def create_graph(config: Optional[Configuration] = None) -> StateGraph:
         config, 
         "research_supervisor"
     )
-    research_team = create_team_graph(research_supervisor, research_agents, config, "research_team")
+    research_team = create_team_graph(
+        research_supervisor,
+        research_agents,
+        config,
+        "research_team"
+    )
 
     # Create writing team
     writing_agents = {
@@ -227,7 +226,12 @@ def create_graph(config: Optional[Configuration] = None) -> StateGraph:
         config, 
         "writing_supervisor"
     )
-    writing_team = create_team_graph(writing_supervisor, writing_agents, config, "writing_team")
+    writing_team = create_team_graph(
+        writing_supervisor,
+        writing_agents,
+        config,
+        "writing_team"
+    )
 
     # Create main workflow graph
     workflow = StateGraph(State)
@@ -246,14 +250,8 @@ def create_graph(config: Optional[Configuration] = None) -> StateGraph:
     workflow.add_node("supervisor", top_supervisor)
     
     # Add end state node
-    def end_node(state: State) -> Dict:
-        return {
-            "messages": state.messages,
-            "next": "END",
-            "input_parameters": state.input_parameters,
-            "story_parameters": state.story_parameters,
-            "research_data": state.research_data
-        }
+    def end_node(state: State) -> StoryState:
+        return state.to_dict() | {"next": "END"}
     
     workflow.add_node("end", end_node)
     
@@ -276,10 +274,7 @@ def create_graph(config: Optional[Configuration] = None) -> StateGraph:
     
     workflow.set_entry_point("supervisor")
     
-    final_graph = workflow.compile()
-    final_graph.name = "Creative Writing System"
-    
-    return final_graph
+    return workflow.compile()
 
 # Create the graph instance for the API server
 graph = create_graph()
